@@ -37,12 +37,12 @@ class VideoProcessor:
         """Creates a short video clip for a single image with Ken Burns effect."""
         output_path = os.path.join(self.video_dir, f"clip_{index:03d}.mp4")
         # FFmpeg zoompan filter for Ken Burns
-        # Slow zoom in: zoompan=z='min(zoom+0.0015,1.5)':d=duration:s=1080x1920
-        # For mobile 9:16, we need to scale first or crop
+        # Optimized for quality and speed
+        # We scale to 1080x1920 first, then zoom
         cmd = (
             f"ffmpeg -y -loop 1 -i \"{image_path}\" "
-            f"-vf \"scale=w=1080:h=1920,zoompan=z='min(zoom+0.001,1.5)':d={int(duration*25)}:s=1080x1920,format=yuv420p\" "
-            f"-t {duration} -r 25 \"{output_path}\""
+            f"-vf \"scale=w=1080:h=1920,zoompan=z='min(zoom+0.0015,1.5)':d={int(duration*25)}:s=1080x1920,format=yuv420p\" "
+            f"-t {duration} -r 25 -c:v libx264 -preset fast -crf 20 \"{output_path}\""
         )
         subprocess.run(cmd, shell=True, check=True)
         return output_path
@@ -61,14 +61,13 @@ class VideoProcessor:
         
         final_video = os.path.join(self.job_dir, "final_output.mp4")
         # Add audio and burn subtitles
-        # Note: subtitles filter might need specialized path on some OS
-        # Using a simple style for subtitles
-        subtitle_filter = f"subtitles='{srt_path}':force_style='Alignment=2,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1,Shadow=0'"
+        # Alignment=2 is bottom center
+        subtitle_filter = f"subtitles='{srt_path}':force_style='Alignment=2,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,MarginV=40'"
         
         cmd = (
             f"ffmpeg -y -i \"{raw_video}\" -i \"{audio_path}\" "
             f"-vf \"{subtitle_filter}\" "
-            f"-c:v libx264 -preset ultrafast -crf 23 -c:a aac -shortest \"{final_video}\""
+            f"-c:v libx264 -preset fast -crf 18 -c:a aac -b:a 192k -shortest \"{final_video}\""
         )
         subprocess.run(cmd, shell=True, check=True)
         return final_video

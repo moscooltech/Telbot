@@ -45,15 +45,17 @@ async def process_queue():
                 shutil.rmtree(job_dir)
 
 async def run_generation(update: Update, prompt: str, job_id: str):
-    status_msg = await update.message.reply_text("🧠 Generating scenes...")
+    print(f"🎬 Starting generation for job: {job_id}")
+    status_msg = await update.message.reply_text("🧠 Generating story and scenes...")
     
-    # 1. Generate Scenes
+    # 1. Generate Scenes & Metadata
     sg = SceneGenerator()
-    scenes = sg.generate_scenes(prompt)
+    scenes, metadata = sg.generate_all(prompt)
     if not scenes:
         raise Exception("Failed to generate scenes.")
     
     await status_msg.edit_text(f"🖼️ Generated {len(scenes)} scenes. Creating images...")
+    print(f"📸 Generating {len(scenes)} images for job: {job_id}")
     
     # 2. Generate Images
     ig = ImageGenerator(job_id)
@@ -62,6 +64,7 @@ async def run_generation(update: Update, prompt: str, job_id: str):
         raise Exception("Failed to generate images.")
         
     await status_msg.edit_text("🎙️ Images done. Generating narration...")
+    print(f"🎙️ Generating narration for job: {job_id}")
     
     # 3. Generate Audio
     ap = AudioProcessor(job_id)
@@ -75,8 +78,10 @@ async def run_generation(update: Update, prompt: str, job_id: str):
             bg_music = musics[0]
             
     final_audio = ap.merge_audio(narration_paths, bg_music)
+    print(f"🎵 Audio merged for job: {job_id}")
     
     await status_msg.edit_text("🎬 Assembling video (this may take a minute)...")
+    print(f"🎞️ Assembling video for job: {job_id}")
     
     # 4. Generate Video
     vp = VideoProcessor(job_id)
@@ -84,19 +89,20 @@ async def run_generation(update: Update, prompt: str, job_id: str):
     
     clip_paths = []
     for i, (img_path, dur) in enumerate(zip(image_paths, durations)):
+        print(f"📹 Processing clip {i+1}/{len(image_paths)}")
         clip = vp.create_scene_video(img_path, dur, i)
         clip_paths.append(clip)
         
     final_video = vp.assemble_video(clip_paths, final_audio, srt_path)
+    print(f"✅ Video assembly complete: {final_video}")
     
-    # 5. Generate Metadata
-    metadata = sg.generate_viral_metadata(prompt, " ".join(scenes[:3]))
     caption = metadata.get("caption", "")
     hashtags = metadata.get("hashtags", "")
     
     await status_msg.edit_text("✅ Video complete! Uploading...")
     
-    # 6. Send Result
+    # 5. Send Result
+    print(f"📤 Uploading video for job: {job_id}")
     with open(final_video, "rb") as video:
         await update.message.reply_video(
             video=video,
@@ -105,3 +111,4 @@ async def run_generation(update: Update, prompt: str, job_id: str):
         )
     
     await status_msg.delete()
+    print(f"✨ Job {job_id} finished successfully!")
