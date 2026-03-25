@@ -8,7 +8,7 @@ class SceneGenerator:
         self.api_key = OPENROUTER_API_KEY
         self.model = "google/gemini-2.0-flash-lite-preview-02-05:free" # Fast and free
 
-    def generate_all(self, prompt):
+    def generate_all(self, prompt, retry=3):
         """
         Generates both scenes and viral metadata in a single API call.
         Returns a tuple: (scenes, metadata)
@@ -44,28 +44,32 @@ class SceneGenerator:
             "response_format": { "type": "json_object" } # Request JSON specifically
         }
         
-        try:
-            start_time = time.time()
-            response = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=45
-            )
-            response.raise_for_status()
-            content = response.json()['choices'][0]['message']['content']
-            
-            data = json.loads(content)
-            scenes = data.get("scenes", [])
-            metadata = {
-                "caption": data.get("caption", "Amazing story!"),
-                "hashtags": " ".join(data.get("hashtags", ["#fyp", "#viral"]))
-            }
-            
-            print(f"✅ AI generated {len(scenes)} scenes in {time.time() - start_time:.2f}s")
-            return scenes, metadata
-            
-        except Exception as e:
-            print(f"❌ Error in SceneGenerator: {e}")
-            # Fallback
-            return [prompt], {"caption": prompt[:20], "hashtags": "#viral #fyp"}
+        for attempt in range(retry):
+            try:
+                start_time = time.time()
+                response = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=60
+                )
+                response.raise_for_status()
+                content = response.json()['choices'][0]['message']['content']
+                
+                data = json.loads(content)
+                scenes = data.get("scenes", [])
+                metadata = {
+                    "caption": data.get("caption", "Amazing story!"),
+                    "hashtags": " ".join(data.get("hashtags", ["#fyp", "#viral"]))
+                }
+                
+                print(f"✅ AI generated {len(scenes)} scenes in {time.time() - start_time:.2f}s")
+                return scenes, metadata
+                
+            except Exception as e:
+                print(f"❌ Error in SceneGenerator attempt {attempt+1}: {e}")
+                if attempt < retry - 1:
+                    time.sleep(2 * (attempt + 1))
+                else:
+                    # Fallback on final failure
+                    return [prompt], {"caption": prompt[:20], "hashtags": "#viral #fyp"}

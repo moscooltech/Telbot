@@ -18,5 +18,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Create necessary directories
 RUN mkdir -p assets/music assets/fonts temp
 
-# Run main.py when the container launches
-CMD ["python", "main.py"]
+# Run the web server
+CMD ["python", "app.py"]

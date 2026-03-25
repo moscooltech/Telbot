@@ -5,3 +5,5 @@ Pillow
 gTTS
 python-dotenv
 aiohttp
+fastapi
+uvicorn[standard]
