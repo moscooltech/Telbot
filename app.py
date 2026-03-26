@@ -1,12 +1,11 @@
 import os
-import asyncio
 import logging
 import uvicorn
 from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler
 from config import TELEGRAM_TOKEN
-from bot.handlers import start, generate, process_queue, set_bot_instance
+from bot.handlers import start, generate
 
 # Configure logging
 logging.basicConfig(
@@ -22,8 +21,10 @@ PORT = int(os.getenv("PORT", "10000"))
 app = FastAPI()
 
 # Bot application initialization
+# We use the token to build the app which will handle command parsing
 bot_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-# Add handlers
+
+# Add handlers (these are async and handle the initial request)
 bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CommandHandler("generate", generate))
 
@@ -38,9 +39,6 @@ async def on_startup():
     await bot_app.initialize()
     await bot_app.start()
 
-    # CRITICAL: Set the global bot instance for background worker
-    set_bot_instance(bot_app.bot)
-
     # Set the webhook automatically on startup
     if WEBHOOK_URL:
         webhook_path = f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}"
@@ -49,9 +47,6 @@ async def on_startup():
     else:
         logger.warning("⚠️ WEBHOOK_URL is not set. Webhook will not be registered automatically.")
 
-    # Start the persistent background worker
-    asyncio.create_task(process_queue())
-    logger.info("👷 Background worker active.")
     logger.info("🚀 Webhook service is ready!")
 
 @app.on_event("shutdown")
@@ -79,13 +74,18 @@ async def handle_webhook(token: str, request: Request):
     
     try:
         data = await request.json()
+        # Parse the JSON into a Telegram Update object
         update = Update.de_json(data, bot_app.bot)
-        # Process asynchronously (non-blocking)
+        
+        # Process the update (this triggers start/generate handlers)
+        # These handlers will now correctly spawn background threads for heavy work
         await bot_app.process_update(update)
+        
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"❌ Webhook error: {e}")
         return Response(status_code=500)
 
 if __name__ == "__main__":
+    # Render binds to 0.0.0.0 and uses the PORT env var
     uvicorn.run(app, host="0.0.0.0", port=PORT)
