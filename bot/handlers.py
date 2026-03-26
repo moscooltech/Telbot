@@ -1,5 +1,5 @@
 import os
-import asyncio
+import threading
 import time
 import shutil
 import logging
@@ -10,12 +10,10 @@ from services.image_generator import ImageGenerator
 from services.audio_processor import AudioProcessor
 from services.video_processor import VideoProcessor
 from config import TEMP_DIR, MUSIC_DIR
+from utils.telegram_api import TelegramAPI
 
 # Configure logging
 logger = logging.getLogger(__name__)
-
-# Global queue for jobs
-queue = asyncio.Queue()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command."""
@@ -30,113 +28,134 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /generate command."""
     if not context.args:
-        await update.message.reply_text("❌ Please provide a prompt! Example: /generate A futuristic city in Nigeria.")
+        await update.message.reply_text("❌ Please provide a prompt!")
         return
         
+    # 1. EXTRACT ONLY PRIMITIVE DATA
     prompt = " ".join(context.args)
-    job_id = f"{update.message.from_user.id}_{int(time.time())}"
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    job_id = f"{user_id}_{int(time.time())}"
     
-    # Inform user and add to queue
-    await update.message.reply_text(f"🚀 **Job Received!**\nYour video is being added to the queue.\n**ID:** `{job_id}`", parse_mode="Markdown")
-    await queue.put((update, prompt, job_id))
+    # Inform user immediately via the normal async context
+    await update.message.reply_text(
+        f"🚀 **Job Received!**\nYour video is being processed in the background.\n**ID:** `{job_id}`", 
+        parse_mode="Markdown"
+    )
+    
+    # 2. PASS CLEAN ARGUMENTS INTO A THREAD
+    # We use threading.Thread for heavy work to avoid blocking the event loop
+    # and to bypass async-bound object issues.
+    thread = threading.Thread(
+        target=run_generation_sync,
+        args=(chat_id, prompt, job_id)
+    )
+    thread.start()
+    logger.info(f"Started background thread for job {job_id}")
 
-async def process_queue():
-    """Worker task to process jobs one by one."""
-    logger.info("👷 Worker task started and waiting for jobs...")
-    while True:
-        update, prompt, job_id = await queue.get()
-        logger.info(f"📥 Processing job: {job_id}")
-        try:
-            await run_generation(update, prompt, job_id)
-        except Exception as e:
-            logger.error(f"❌ Job {job_id} failed: {e}", exc_info=True)
-            try:
-                await update.message.reply_text(f"❌ **Generation failed:** {str(e)}\nPlease try again with a different prompt.", parse_mode="Markdown")
-            except:
-                pass
-        finally:
-            queue.task_done()
-            # Clean up temp files
-            job_dir = os.path.join(TEMP_DIR, job_id)
-            if os.path.exists(job_dir):
-                shutil.rmtree(job_dir)
-            logger.info(f"🧹 Cleaned up job: {job_id}")
-
-async def run_generation(update: Update, prompt: str, job_id: str):
-    """Main generation logic with progress updates."""
-    status_msg = await update.message.reply_text("🧠 **Step 1/5:** Generating story and scenes...", parse_mode="Markdown")
+def run_generation_sync(chat_id, prompt, job_id):
+    """
+    Synchronous background function that accepts only primitive arguments.
+    Uses TelegramAPI for manual communication.
+    """
+    logger.info(f"📥 Processing job {job_id} in background thread...")
     
-    # 1. Generate Scenes & Metadata
-    logger.info(f"[{job_id}] Generating scenes...")
-    sg = SceneGenerator()
-    scenes, metadata = sg.generate_all(prompt)
-    if not scenes:
-        raise Exception("Failed to generate scenes from AI.")
+    # 3. REFACTOR BACKGROUND FUNCTION TO USE MANUAL API
+    status_data = TelegramAPI.send_message(
+        chat_id=chat_id, 
+        text="🧠 **Step 1/5:** Generating story and scenes..."
+    )
+    status_msg_id = status_data.get("message_id") if status_data else None
     
-    await status_msg.edit_text(f"🖼️ **Step 2/5:** Generated {len(scenes)} scenes.\nCreating high-quality images...", parse_mode="Markdown")
-    logger.info(f"[{job_id}] Generating {len(scenes)} images...")
-    
-    # 2. Generate Images
-    ig = ImageGenerator(job_id)
-    image_paths = []
-    for i, scene in enumerate(scenes):
-        if i > 0:
-            await status_msg.edit_text(f"🖼️ **Step 2/5:** Creating images... ({i}/{len(scenes)})", parse_mode="Markdown")
-        path = ig.generate_image(scene, i)
-        if path:
-            image_paths.append(path)
-        else:
-            logger.warning(f"[{job_id}] Failed image for scene {i}, skipping.")
-
-    if not image_paths:
-        raise Exception("Failed to generate any images.")
+    try:
+        # --- PHASE 1: SCENES ---
+        sg = SceneGenerator()
+        scenes, metadata = sg.generate_all(prompt)
+        if not scenes:
+            raise Exception("Failed to generate scenes.")
         
-    await status_msg.edit_text("🎙️ **Step 3/5:** Images done. Generating AI narration...", parse_mode="Markdown")
-    logger.info(f"[{job_id}] Generating narration...")
-    
-    # 3. Generate Audio
-    ap = AudioProcessor(job_id)
-    narration_paths, durations = ap.generate_narration(scenes[:len(image_paths)])
-    
-    # Pick first bg music if exists
-    bg_music = None
-    if os.path.exists(MUSIC_DIR):
-        musics = [os.path.join(MUSIC_DIR, f) for f in os.listdir(MUSIC_DIR) if f.endswith(".mp3")]
-        if musics:
-            bg_music = musics[0]
+        if status_msg_id:
+            TelegramAPI.edit_message(
+                chat_id=chat_id,
+                message_id=status_msg_id,
+                text=f"🖼️ **Step 2/5:** Generated {len(scenes)} scenes.\nCreating high-quality images..."
+            )
+        
+        # --- PHASE 2: IMAGES ---
+        ig = ImageGenerator(job_id)
+        image_paths = []
+        for i, scene in enumerate(scenes):
+            path = ig.generate_image(scene, i)
+            if path:
+                image_paths.append(path)
+                # Update progress occasionally
+                if i > 0 and i % 3 == 0 and status_msg_id:
+                    TelegramAPI.edit_message(
+                        chat_id=chat_id,
+                        message_id=status_msg_id,
+                        text=f"🖼️ **Step 2/5:** Creating images... ({i}/{len(scenes)})"
+                    )
+
+        if not image_paths:
+            raise Exception("Failed to generate any images.")
             
-    final_audio = ap.merge_audio(narration_paths, bg_music)
-    logger.info(f"[{job_id}] Audio processing complete.")
-    
-    await status_msg.edit_text("🎬 **Step 4/5:** Assembling video (this may take a minute)...", parse_mode="Markdown")
-    logger.info(f"[{job_id}] Assembling video clips...")
-    
-    # 4. Generate Video
-    vp = VideoProcessor(job_id)
-    srt_path = vp.generate_srt(scenes[:len(image_paths)], durations)
-    
-    clip_paths = []
-    for i, (img_path, dur) in enumerate(zip(image_paths, durations)):
-        logger.info(f"[{job_id}] Processing clip {i+1}/{len(image_paths)}")
-        clip = vp.create_scene_video(img_path, dur, i)
-        clip_paths.append(clip)
+        if status_msg_id:
+            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🎙️ **Step 3/5:** Generating AI narration...")
         
-    final_video = vp.assemble_video(clip_paths, final_audio, srt_path)
-    logger.info(f"[{job_id}] Video assembly complete: {final_video}")
-    
-    caption = metadata.get("caption", "")
-    hashtags = metadata.get("hashtags", "")
-    
-    await status_msg.edit_text("✅ **Step 5/5:** Video complete! Uploading to Telegram...", parse_mode="Markdown")
-    
-    # 5. Send Result
-    logger.info(f"[{job_id}] Uploading final video...")
-    with open(final_video, "rb") as video:
-        await update.message.reply_video(
-            video=video,
-            caption=f"{caption}\n\n{hashtags}",
-            supports_streaming=True
+        # --- PHASE 3: AUDIO ---
+        ap = AudioProcessor(job_id)
+        narration_paths, durations = ap.generate_narration(scenes[:len(image_paths)])
+        
+        bg_music = None
+        if os.path.exists(MUSIC_DIR):
+            musics = [os.path.join(MUSIC_DIR, f) for f in os.listdir(MUSIC_DIR) if f.endswith(".mp3")]
+            if musics:
+                bg_music = musics[0]
+                
+        final_audio = ap.merge_audio(narration_paths, bg_music)
+        
+        if status_msg_id:
+            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🎬 **Step 4/5:** Assembling video (this may take a minute)...")
+        
+        # --- PHASE 4: VIDEO ---
+        vp = VideoProcessor(job_id)
+        srt_path = vp.generate_srt(scenes[:len(image_paths)], durations)
+        
+        clip_paths = []
+        for i, (img_path, dur) in enumerate(zip(image_paths, durations)):
+            clip = vp.create_scene_video(img_path, dur, i)
+            clip_paths.append(clip)
+            
+        final_video = vp.assemble_video(clip_paths, final_audio, srt_path)
+        
+        # --- PHASE 5: UPLOAD ---
+        if status_msg_id:
+            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="✅ **Step 5/5:** Uploading to Telegram...")
+        
+        caption = metadata.get("caption", "AI Generated Video")
+        hashtags = metadata.get("hashtags", "#ai #video")
+        
+        # 4. SEND RESULT MANUALLY VIA TELEGRAM API
+        result = TelegramAPI.send_video(
+            chat_id=chat_id,
+            video_path=final_video,
+            caption=f"{caption}\n\n{hashtags}"
         )
-    
-    await status_msg.delete()
-    logger.info(f"✨ Job {job_id} finished successfully!")
+        
+        if result and status_msg_id:
+            TelegramAPI.delete_message(chat_id, status_msg_id)
+            
+        logger.info(f"✨ Job {job_id} finished successfully!")
+
+    except Exception as e:
+        logger.error(f"❌ Job {job_id} failed: {e}", exc_info=True)
+        TelegramAPI.send_message(
+            chat_id=chat_id,
+            text=f"❌ **Generation failed:** {str(e)}\nPlease try again."
+        )
+    finally:
+        # Clean up temp files
+        job_dir = os.path.join(TEMP_DIR, job_id)
+        if os.path.exists(job_dir):
+            shutil.rmtree(job_dir)
+        logger.info(f"🧹 Cleaned up job: {job_id}")
