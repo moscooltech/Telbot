@@ -2,11 +2,12 @@ import os
 import requests
 import random
 import time
+from typing import List, Optional, Dict, Any
 from config import POLLINATIONS_URL, TEMP_DIR
 
 
 class ImageGenerator:
-    def __init__(self, job_id):
+    def __init__(self, job_id: str) -> None:
         self.job_id = job_id
         self.job_dir = os.path.join(TEMP_DIR, job_id)
         self.image_dir = os.path.join(self.job_dir, "images")
@@ -22,12 +23,12 @@ class ImageGenerator:
         prompt = prompt.replace(",", "")
         words = prompt.split()
 
-        # Limit to 12–15 words (important for stability)
+        # Limit to 12-15 words (important for stability)
         prompt = " ".join(words[:15])
 
         return prompt
 
-    def generate_image(self, prompt: str, index: int, retry: int = 3) -> str | None:
+    def generate_image(self, prompt: str, index: int, retry: int = 3) -> Optional[str]:
         """
         Generates a single image using Pollinations with retries.
         """
@@ -68,13 +69,13 @@ class ImageGenerator:
         print(f"🚫 Failed to generate image after {retry} attempts (scene {index})")
         return None
 
-    def generate_all_images(self, scenes: list[str]) -> list[str]:
+    def generate_all_images(self, scenes: List[str]) -> List[str]:
         """
         Generates images for all scenes.
         """
         print("\n🎬 Starting image generation for all scenes...")
 
-        image_paths = []
+        image_paths: List[str] = []
 
         for i, scene in enumerate(scenes):
             path = self.generate_image(scene, i)
