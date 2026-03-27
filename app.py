@@ -26,7 +26,7 @@ bot_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
 # Add handlers (these are async and handle the initial request)
 bot_app.add_handler(CommandHandler("start", start))
-bot_app.add_handler(CommandHandler("generate", generate))
+bot_app.add_handler(CommandHandler(["generate", "gen"], generate))
 
 @app.on_event("startup")
 async def on_startup():

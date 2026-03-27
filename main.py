@@ -23,7 +23,7 @@ async def main():
 
     # Add handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("generate", generate))
+    app.add_handler(CommandHandler(["generate", "gen"], generate))
 
     # Start the worker task in the background
     print("👷 Starting job queue worker...")

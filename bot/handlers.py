@@ -20,8 +20,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name
     await update.message.reply_text(
         f"👋 Hello {user_name}! I am your AI Video Creator.\n\n"
-        "Send /generate followed by a story prompt to create a viral video.\n"
-        "Example: `/generate A story about a lost astronaut on a neon planet.`",
+        "Send /generate (or /gen) followed by a story prompt to create a viral video.\n"
+        "Example: `/gen A story about a lost astronaut on a neon planet.`",
         parse_mode="Markdown"
     )
 

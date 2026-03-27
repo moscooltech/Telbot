@@ -55,8 +55,8 @@ Render's "Web Service" free tier allows you to run Docker containers, which is p
 1. Once Render shows **"Live"** in the logs, go to your bot on Telegram.
 2. Press **"Start"** or send `/start`.
 3. **Generate a Video**:
-   - Send: `/generate [Your Story Idea]`
-   - *Example*: `/generate A short story about a brave cat exploring a neon-lit cyberpunk city.`
+   - Send: `/generate` or `/gen` followed by `[Your Story Idea]`
+   - *Example*: `/gen A short story about a brave cat exploring a neon-lit cyberpunk city.`
 4. **Wait for Processing**:
    - The bot will reply with "🧠 Generating scenes...".
    - It will then create images, narration, and finally the video.
