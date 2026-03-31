@@ -1,7 +1,10 @@
 import os
+import logging
 from gtts import gTTS
-import subprocess
+from moviepy.editor import AudioFileClip, concatenate_audioclips, CompositeAudioClip
 from config import TEMP_DIR
+
+logger = logging.getLogger(__name__)
 
 class AudioProcessor:
     def __init__(self, job_id):
@@ -20,47 +23,72 @@ class AudioProcessor:
         durations = []
         
         for i, scene in enumerate(scenes):
-            filepath = os.path.join(self.audio_dir, f"scene_{i:03d}.mp3")
-            tts = gTTS(text=scene, lang='en', slow=False)
-            tts.save(filepath)
-            
-            # Get duration using ffprobe
-            duration = self.get_duration(filepath)
-            
-            narration_paths.append(filepath)
-            durations.append(duration)
+            try:
+                filepath = os.path.join(self.audio_dir, f"scene_{i:03d}.mp3")
+                tts = gTTS(text=scene, lang='en', slow=False)
+                tts.save(filepath)
+                
+                # Get duration using MoviePy
+                audio = AudioFileClip(filepath)
+                duration = audio.duration
+                audio.close()
+                
+                narration_paths.append(filepath)
+                durations.append(duration)
+            except Exception as e:
+                logger.error(f"❌ Failed to generate narration for scene {i}: {e}")
+                continue
             
         return narration_paths, durations
 
-    def get_duration(self, filepath):
-        """Returns the duration of an audio file in seconds."""
-        cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 {filepath}"
-        try:
-            output = subprocess.check_output(cmd, shell=True).decode().strip()
-            return float(output)
-        except:
-            return 5.0 # Fallback
-
     def merge_audio(self, narration_paths, bg_music_path=None):
         """
-        Merges narration files and adds background music.
+        Merges narration files and adds background music using MoviePy.
         """
-        # Create a list file for FFmpeg
-        list_file = os.path.join(self.audio_dir, "audio_list.txt")
-        with open(list_file, "w") as f:
-            for path in narration_paths:
-                f.write(f"file '{os.path.abspath(path)}'\n")
+        logger.info(f"🎙️ Merging audio for job {self.job_id}...")
         
-        merged_narration = os.path.join(self.audio_dir, "merged_narration.mp3")
-        # Concatenate audio
-        cmd = f"ffmpeg -y -f concat -safe 0 -i {list_file} -c copy {merged_narration}"
-        subprocess.run(cmd, shell=True, check=True)
+        audio_clips = []
+        for path in narration_paths:
+            try:
+                if os.path.exists(path):
+                    audio_clips.append(AudioFileClip(path))
+            except Exception as e:
+                logger.error(f"❌ Failed to load audio clip {path}: {e}")
+
+        if not audio_clips:
+            return None
+
+        # Concatenate narration clips
+        merged_narration = concatenate_audioclips(audio_clips)
+        
+        final_audio_clip = merged_narration
         
         if bg_music_path and os.path.exists(bg_music_path):
-            final_audio = os.path.join(self.audio_dir, "final_audio.mp3")
-            # Mix with background music (lower volume)
-            cmd = f"ffmpeg -y -i {merged_narration} -stream_loop -1 -i {bg_music_path} -filter_complex \"[0:a]volume=1.0[v];[1:a]volume=0.15[m];[v][m]amix=inputs=2:duration=first\" {final_audio}"
-            subprocess.run(cmd, shell=True, check=True)
-            return final_audio
-            
-        return merged_narration
+            try:
+                bg_music = AudioFileClip(bg_music_path).volumex(0.15)
+                
+                # Loop background music to match narration duration
+                if bg_music.duration < merged_narration.duration:
+                    # Use a simple loop approach
+                    loops = int(merged_narration.duration / bg_music.duration) + 1
+                    bg_music = concatenate_audioclips([bg_music] * loops)
+                
+                # Trim to match narration length
+                bg_music = bg_music.subclip(0, merged_narration.duration)
+                
+                # Composite narration and music
+                final_audio_clip = CompositeAudioClip([merged_narration, bg_music])
+            except Exception as e:
+                logger.error(f"❌ Failed to add background music: {e}")
+
+        final_audio_path = os.path.join(self.audio_dir, "final_audio.mp3")
+        final_audio_clip.write_audiofile(final_audio_path, logger=None)
+        
+        # Cleanup
+        for clip in audio_clips:
+            clip.close()
+        if final_audio_clip != merged_narration:
+            merged_narration.close()
+        final_audio_clip.close()
+        
+        return final_audio_path

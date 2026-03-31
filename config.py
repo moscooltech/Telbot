@@ -10,6 +10,10 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = "openrouter/free" # Or specifically "google/gemini-2.0-flash-lite-preview-02-05:free"
 
+# Bytez API (Fallback)
+BYTEZ_API_KEY = os.getenv("BYTEZ_API_KEY", "")
+BYTEZ_MODEL = "stabilityai/stable-diffusion-xl-base-1.0" # Good fallback model
+
 # Directories
 TEMP_DIR = "temp"
 ASSETS_DIR = "assets"
@@ -17,7 +21,8 @@ MUSIC_DIR = "assets/music"
 FONTS_DIR = "assets/fonts"
 
 # Image Generation
-POLLINATIONS_URL = "https://image.pollinations.ai/prompt/{prompt}?width=1080&height=1920&nologo=true&seed={seed}&model=flux"
+POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
+POLLINATIONS_URL = "https://gen.pollinations.ai/image/{prompt}"
 
 # Video Settings
 VIDEO_DURATION_PER_SCENE = 5 # seconds

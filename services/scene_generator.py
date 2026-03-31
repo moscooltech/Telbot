@@ -16,16 +16,23 @@ class SceneGenerator:
         print(f"🧠 Prompting AI for scenes and metadata: \"{prompt[:30]}...\"")
         
         system_prompt = """
-        You are an AI video screenwriter and social media expert.
-        Convert the user story into 8-10 cinematic scenes for a TikTok video.
-        Also generate a viral caption and relevant hashtags.
+        You are an AI Video Director and Lead Screenwriter.
+        Your task is to analyze the user's prompt and determine the "Perfect Length" for the video.
+        
+        - If the prompt is simple, aim for ~45-60 seconds (approx 12-15 scenes).
+        - If the prompt is deep, epic, or complex, aim for 2+ minutes (approx 25-30 scenes).
+        
+        Guidelines:
+        1. Determine the optimal number of scenes to tell the story effectively without rushing or dragging.
+        2. Each "narration" must be descriptive and natural, lasting approx 5-7 seconds when spoken.
+        3. Each "scene" must be a highly detailed visual prompt for an image generator.
         
         Output format: JSON ONLY with these keys:
-        - "scenes": List of 8-10 visual scene descriptions (1-2 sentences each).
-        - "caption": Catchy TikTok hook (max 20 words).
-        - "hashtags": List of 8-12 viral hashtags (include #naijatiktok, #viral).
-        
-        Ensure "scenes" descriptions are highly detailed for an image generator.
+        - "estimated_duration_seconds": Your estimate of the total runtime.
+        - "scenes": List of visual scene descriptions.
+        - "narrations": List of narration scripts (must match the number of scenes).
+        - "caption": A viral social media caption.
+        - "hashtags": A list of 10+ viral hashtags.
         """
         
         headers = {
@@ -58,13 +65,14 @@ class SceneGenerator:
                 
                 data = json.loads(content)
                 scenes = data.get("scenes", [])
+                narrations = data.get("narrations", scenes) # Fallback to scenes if narrations not present
                 metadata = {
                     "caption": data.get("caption", "Amazing story!"),
                     "hashtags": " ".join(data.get("hashtags", ["#fyp", "#viral"]))
                 }
                 
                 print(f"✅ AI generated {len(scenes)} scenes in {time.time() - start_time:.2f}s")
-                return scenes, metadata
+                return scenes, narrations, metadata
                 
             except Exception as e:
                 print(f"❌ Error in SceneGenerator attempt {attempt+1}: {e}")

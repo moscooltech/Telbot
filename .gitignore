@@ -1,0 +1,31 @@
+# Environment variables
+.env
+
+# Python/Environment
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env/
+build/
+dist/
+*.egg-info/
+
+# Temporary and local files
+temp/
+assets/music/*.mp3
+assets/fonts/*.ttf
+!assets/music/.gitkeep
+!assets/fonts/.gitkeep
+*.mp4
+*.jpg
+*.png
+
+# Logs
+*.log
+
+# System files
+.DS_Store
+Thumbs.db

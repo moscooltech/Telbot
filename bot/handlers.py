@@ -70,7 +70,7 @@ def run_generation_sync(chat_id, prompt, job_id):
     try:
         # --- PHASE 1: SCENES ---
         sg = SceneGenerator()
-        scenes, metadata = sg.generate_all(prompt)
+        scenes, narrations, metadata = sg.generate_all(prompt)
         if not scenes:
             raise Exception("Failed to generate scenes.")
         
@@ -104,7 +104,8 @@ def run_generation_sync(chat_id, prompt, job_id):
         
         # --- PHASE 3: AUDIO ---
         ap = AudioProcessor(job_id)
-        narration_paths, durations = ap.generate_narration(scenes[:len(image_paths)])
+        # Use narrations instead of scene descriptions for gTTS
+        narration_paths, durations = ap.generate_narration(narrations[:len(image_paths)])
         
         bg_music = None
         if os.path.exists(MUSIC_DIR):

@@ -7,3 +7,5 @@ python-dotenv
 aiohttp
 fastapi
 uvicorn[standard]
+moviepy
+bytez
