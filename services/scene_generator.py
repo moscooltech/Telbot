@@ -80,4 +80,4 @@ class SceneGenerator:
                     time.sleep(2 * (attempt + 1))
                 else:
                     # Fallback on final failure
-                    return [prompt], {"caption": prompt[:20], "hashtags": "#viral #fyp"}
+                    return [prompt], [prompt], {"caption": prompt[:20], "hashtags": "#viral #fyp"}
