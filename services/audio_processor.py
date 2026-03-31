@@ -1,7 +1,7 @@
 import os
 import logging
 from gtts import gTTS
-from moviepy.editor import AudioFileClip, concatenate_audioclips, CompositeAudioClip
+from moviepy import AudioFileClip, concatenate_audioclips, CompositeAudioClip
 from config import TEMP_DIR
 
 logger = logging.getLogger(__name__)

@@ -1,7 +1,7 @@
 import os
 import subprocess
 import logging
-from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip, concatenate_videoclips
+from moviepy import VideoFileClip, AudioFileClip, CompositeAudioClip, concatenate_videoclips
 from config import TEMP_DIR
 
 logger = logging.getLogger(__name__)
