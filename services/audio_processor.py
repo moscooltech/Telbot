@@ -14,6 +14,28 @@ class AudioProcessor:
         self.audio_dir = os.path.join(self.job_dir, "audio")
         os.makedirs(self.audio_dir, exist_ok=True)
 
+    def generate_single_narration(self, text, index):
+        """Generates a single narration file and returns (path, duration)."""
+        import subprocess
+        import time
+        try:
+            filepath = os.path.join(self.audio_dir, f"scene_{index:03d}.mp3")
+            tts = gTTS(text=text, lang='en', slow=False)
+            tts.save(filepath)
+            
+            # Get duration using ffprobe
+            cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{filepath}\""
+            try:
+                output = subprocess.check_output(cmd, shell=True).decode().strip()
+                duration = float(output)
+            except:
+                duration = max(3.0, len(text) / 15.0)
+            
+            return filepath, duration
+        except Exception as e:
+            logger.error(f"❌ Failed to generate narration {index}: {e}")
+            return None, 0
+
     def generate_narration(self, scenes):
         """
         Generates individual audio files for each scene and returns their filepaths.

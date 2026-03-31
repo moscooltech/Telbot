@@ -104,28 +104,55 @@ def run_generation_sync(chat_id, prompt, job_id):
         
         # --- PHASE 3: AUDIO ---
         ap = AudioProcessor(job_id)
-        # Use narrations instead of scene descriptions for gTTS
-        narration_paths, durations = ap.generate_narration(narrations[:len(image_paths)])
+        narration_paths = []
+        durations = []
         
+        num_narrations = len(image_paths)
+        for i, narration_text in enumerate(narrations[:num_narrations]):
+            if status_msg_id:
+                TelegramAPI.edit_message(
+                    chat_id=chat_id, 
+                    message_id=status_msg_id, 
+                    text=f"🎙️ **Step 3/5:** Generating AI narration... ({i+1}/{num_narrations})"
+                )
+            
+            path, dur = ap.generate_single_narration(narration_text, i)
+            if path:
+                narration_paths.append(path)
+                durations.append(dur)
+        
+        if not narration_paths:
+            raise Exception("Failed to generate narration files.")
+            
         bg_music = None
         if os.path.exists(MUSIC_DIR):
             musics = [os.path.join(MUSIC_DIR, f) for f in os.listdir(MUSIC_DIR) if f.endswith(".mp3")]
             if musics:
                 bg_music = musics[0]
-                
-        final_audio = ap.merge_audio(narration_paths, bg_music)
         
         if status_msg_id:
-            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🎬 **Step 4/5:** Assembling video (this may take a minute)...")
+            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🎵 **Step 3/5:** Finalizing audio mix...")
+            
+        final_audio = ap.merge_audio(narration_paths, bg_music)
         
         # --- PHASE 4: VIDEO ---
         vp = VideoProcessor(job_id)
         srt_path = vp.generate_srt(scenes[:len(image_paths)], durations)
         
         clip_paths = []
+        num_clips = len(image_paths)
         for i, (img_path, dur) in enumerate(zip(image_paths, durations)):
+            if status_msg_id:
+                TelegramAPI.edit_message(
+                    chat_id=chat_id, 
+                    message_id=status_msg_id, 
+                    text=f"🎬 **Step 4/5:** Processing video clips... ({i+1}/{num_clips})"
+                )
             clip = vp.create_scene_video(img_path, dur, i)
             clip_paths.append(clip)
+            
+        if status_msg_id:
+            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🏗️ **Step 4/5:** Finalizing video assembly (this may take a minute)...")
             
         final_video = vp.assemble_video(clip_paths, final_audio, srt_path)
         
