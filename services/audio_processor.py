@@ -19,6 +19,7 @@ class AudioProcessor:
         Generates individual audio files for each scene and returns their filepaths.
         Also returns the duration of each audio file.
         """
+        import subprocess
         narration_paths = []
         durations = []
         
@@ -28,13 +29,22 @@ class AudioProcessor:
                 tts = gTTS(text=scene, lang='en', slow=False)
                 tts.save(filepath)
                 
-                # Get duration using MoviePy
-                audio = AudioFileClip(filepath)
-                duration = audio.duration
-                audio.close()
+                # Get duration using ffprobe (much lighter than MoviePy)
+                cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{filepath}\""
+                try:
+                    output = subprocess.check_output(cmd, shell=True).decode().strip()
+                    duration = float(output)
+                except:
+                    # Fallback to estimate: approx 15 chars per second for speech
+                    duration = max(3.0, len(scene) / 15.0)
                 
                 narration_paths.append(filepath)
                 durations.append(duration)
+                
+                # Small sleep to let the disk catch up
+                import time
+                time.sleep(0.1)
+                
             except Exception as e:
                 logger.error(f"❌ Failed to generate narration for scene {i}: {e}")
                 continue
