@@ -39,7 +39,7 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Inform user immediately via the normal async context
     await update.message.reply_text(
-        f"🚀 **Job Received!**\nYour video is being processed in the background.\n**ID:** `{job_id}`", 
+        f"🚀 **Job Received!**\nYour video is being processed in the background.\n**ID:** `{{job_id}}`", 
         parse_mode="Markdown"
     )
     
@@ -78,7 +78,7 @@ def run_generation_sync(chat_id, prompt, job_id):
             TelegramAPI.edit_message(
                 chat_id=chat_id,
                 message_id=status_msg_id,
-                text=f"🖼️ **Step 2/5:** Generated {len(scenes)} scenes.\nCreating high-quality images..."
+                text=f"🖼️ **Step 2/5:** Generated {{len(scenes)}} scenes.\nCreating high-quality images..."
             )
         
         # --- PHASE 2: IMAGES ---
@@ -93,7 +93,7 @@ def run_generation_sync(chat_id, prompt, job_id):
                     TelegramAPI.edit_message(
                         chat_id=chat_id,
                         message_id=status_msg_id,
-                        text=f"🖼️ **Step 2/5:** Creating images... ({i}/{len(scenes)})"
+                        text=f"🖼️ **Step 2/5:** Creating images... ({{i}}/{{len(scenes)}})"
                     )
 
         if not image_paths:
@@ -113,7 +113,7 @@ def run_generation_sync(chat_id, prompt, job_id):
                 TelegramAPI.edit_message(
                     chat_id=chat_id, 
                     message_id=status_msg_id, 
-                    text=f"🎙️ **Step 3/5:** Generating AI narration... ({i+1}/{num_narrations})"
+                    text=f"🎙️ **Step 3/5:** Generating AI narration... ({{i+1}}/{{num_narrations}})"
                 )
             
             path, dur = ap.generate_single_narration(narration_text, i)
@@ -132,8 +132,29 @@ def run_generation_sync(chat_id, prompt, job_id):
         
         if status_msg_id:
             TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🎵 **Step 3/5:** Finalizing audio mix...")
+        
+        # --- PHASE 3b: AUDIO MERGE WITH ERROR HANDLING ---
+        try:
+            logger.info(f"Starting audio merge for job {job_id}...")
+            final_audio = ap.merge_audio(narration_paths, bg_music)
             
-        final_audio = ap.merge_audio(narration_paths, bg_music)
+            if not final_audio:
+                raise Exception("Audio merge returned None - no audio file was created")
+            
+            if not os.path.exists(final_audio):
+                raise Exception(f"Audio file does not exist after merge: {{final_audio}}")
+            
+            logger.info(f"✅ Audio merge completed successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Audio processing failed: {{e}}", exc_info=True)
+            if status_msg_id:
+                TelegramAPI.edit_message(
+                    chat_id=chat_id,
+                    message_id=status_msg_id,
+                    text=f"❌ **Step 3 Failed:** Audio processing error\n\n`{{str(e)[:100]}}`"
+                )
+            raise Exception(f"Step 3 (Audio Merge) failed: {{e}}")
         
         # --- PHASE 4: VIDEO ---
         vp = VideoProcessor(job_id)
@@ -145,8 +166,8 @@ def run_generation_sync(chat_id, prompt, job_id):
             if status_msg_id:
                 TelegramAPI.edit_message(
                     chat_id=chat_id, 
-                    message_id=status_msg_id, 
-                    text=f"🎬 **Step 4/5:** Processing video clips... ({i+1}/{num_clips})"
+                    message_id=status_msg_id,
+                    text=f"🎬 **Step 4/5:** Processing video clips... ({{i+1}}/{{num_clips}})"
                 )
             clip = vp.create_scene_video(img_path, dur, i)
             clip_paths.append(clip)
@@ -167,7 +188,7 @@ def run_generation_sync(chat_id, prompt, job_id):
         result = TelegramAPI.send_video(
             chat_id=chat_id,
             video_path=final_video,
-            caption=f"{caption}\n\n{hashtags}"
+            caption=f"{{caption}}\n\n{{hashtags}}"
         )
         
         if result and status_msg_id:
@@ -176,10 +197,10 @@ def run_generation_sync(chat_id, prompt, job_id):
         logger.info(f"✨ Job {job_id} finished successfully!")
 
     except Exception as e:
-        logger.error(f"❌ Job {job_id} failed: {e}", exc_info=True)
+        logger.error(f"❌ Job {job_id} failed: {{e}}", exc_info=True)
         TelegramAPI.send_message(
             chat_id=chat_id,
-            text=f"❌ **Generation failed:** {str(e)}\nPlease try again."
+            text=f"❌ **Generation failed:** {{str(e)}}\nPlease try again."
         )
     finally:
         # Clean up temp files
