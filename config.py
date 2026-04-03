@@ -18,8 +18,13 @@ FONTS_DIR = "assets/fonts"
 
 # Image Generation - OPTIMIZED FOR 512MB RAM
 POLLINATIONS_URL = "https://gen.pollinations.ai/image/{prompt}"
+POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
 IMAGE_WIDTH = 720      # Reduced from 1080 (saves 33% memory)
 IMAGE_HEIGHT = 1280    # Reduced from 1920 (saves 33% memory)
+
+# Bytez fallback configuration (if used)
+BYTEZ_API_KEY = os.getenv("BYTEZ_API_KEY", "")
+BYTEZ_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 
 # Video Settings - 30 SECONDS TARGET
 NUM_SCENES = 5                      # 5 scenes × 6 seconds = 30 seconds
