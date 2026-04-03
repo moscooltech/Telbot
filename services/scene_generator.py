@@ -1,7 +1,7 @@
 import json
 import requests
 import time
-from config import OPENROUTER_API_KEY, OPENROUTER_MODEL
+from config import OPENROUTER_API_KEY, OPENROUTER_MODEL, NUM_SCENES, VIDEO_DURATION_PER_SCENE, RENDER_FREE_TIER
 
 class SceneGenerator:
     def __init__(self):
@@ -11,28 +11,30 @@ class SceneGenerator:
     def generate_all(self, prompt, retry=3):
         """
         Generates both scenes and viral metadata in a single API call.
-        Returns a tuple: (scenes, metadata)
+        Returns a tuple: (scenes, narrations, metadata)
         """
         print(f"🧠 Prompting AI for scenes and metadata: \"{prompt[:30]}...\"")
         
-        system_prompt = """
-        You are an AI Video Director and Lead Screenwriter.
-        Your task is to analyze the user's prompt and determine the "Perfect Length" for the video.
+        # Adjust scene target based on Render Free Tier constraints
+        target_scenes = NUM_SCENES if RENDER_FREE_TIER else 15
         
-        - If the prompt is simple, aim for ~45-60 seconds (approx 12-15 scenes).
-        - If the prompt is deep, epic, or complex, aim for 2+ minutes (approx 25-30 scenes).
+        system_prompt = f"""
+        You are an AI Video Director and Lead Screenwriter.
+        Your task is to analyze the user's prompt and convert it into a short, impactful viral video.
+        
+        Constraint: Generate EXACTLY {target_scenes} scenes.
+        Total target duration: {target_scenes * VIDEO_DURATION_PER_SCENE} seconds.
         
         Guidelines:
-        1. Determine the optimal number of scenes to tell the story effectively without rushing or dragging.
-        2. Each "narration" must be descriptive and natural, lasting approx 5-7 seconds when spoken.
+        1. Distill the story into {target_scenes} cinematic scenes.
+        2. Each "narration" must be roughly {VIDEO_DURATION_PER_SCENE} seconds long when spoken (approx 15-20 words).
         3. Each "scene" must be a highly detailed visual prompt for an image generator.
         
         Output format: JSON ONLY with these keys:
-        - "estimated_duration_seconds": Your estimate of the total runtime.
-        - "scenes": List of visual scene descriptions.
-        - "narrations": List of narration scripts (must match the number of scenes).
+        - "scenes": List of visual scene descriptions (exactly {target_scenes}).
+        - "narrations": List of narration scripts (exactly {target_scenes}).
         - "caption": A viral social media caption.
-        - "hashtags": A list of 10+ viral hashtags.
+        - "hashtags": A list of viral hashtags.
         """
         
         headers = {

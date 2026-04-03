@@ -113,7 +113,7 @@ def run_generation_sync(chat_id, prompt, job_id):
                 TelegramAPI.edit_message(
                     chat_id=chat_id, 
                     message_id=status_msg_id, 
-                    text=f"🎙️ **Step 3/5:** Generating AI narration... ({{i+1}}/{{num_narrations}})"
+                    text=f"🎙️ **Step 3/5:** Generating AI narration... ({i+1}/{num_narrations})"
                 )
             
             path, dur = ap.generate_single_narration(narration_text, i)
@@ -142,19 +142,19 @@ def run_generation_sync(chat_id, prompt, job_id):
                 raise Exception("Audio merge returned None - no audio file was created")
             
             if not os.path.exists(final_audio):
-                raise Exception(f"Audio file does not exist after merge: {{final_audio}}")
+                raise Exception(f"Audio file does not exist after merge: {final_audio}")
             
             logger.info(f"✅ Audio merge completed successfully")
             
         except Exception as e:
-            logger.error(f"❌ Audio processing failed: {{e}}", exc_info=True)
+            logger.error(f"❌ Audio processing failed: {e}", exc_info=True)
             if status_msg_id:
                 TelegramAPI.edit_message(
                     chat_id=chat_id,
                     message_id=status_msg_id,
-                    text=f"❌ **Step 3 Failed:** Audio processing error\n\n`{{str(e)[:100]}}`"
+                    text=f"❌ **Step 3 Failed:** Audio processing error\n\n`{str(e)[:100]}`"
                 )
-            raise Exception(f"Step 3 (Audio Merge) failed: {{e}}")
+            raise Exception(f"Step 3 (Audio Merge) failed: {e}")
         
         # --- PHASE 4: VIDEO ---
         vp = VideoProcessor(job_id)
@@ -167,7 +167,7 @@ def run_generation_sync(chat_id, prompt, job_id):
                 TelegramAPI.edit_message(
                     chat_id=chat_id, 
                     message_id=status_msg_id,
-                    text=f"🎬 **Step 4/5:** Processing video clips... ({{i+1}}/{{num_clips}})"
+                    text=f"🎬 **Step 4/5:** Processing video clips... ({i+1}/{num_clips})"
                 )
             clip = vp.create_scene_video(img_path, dur, i)
             clip_paths.append(clip)
@@ -207,4 +207,4 @@ def run_generation_sync(chat_id, prompt, job_id):
         job_dir = os.path.join(TEMP_DIR, job_id)
         if os.path.exists(job_dir):
             shutil.rmtree(job_dir)
-        logger.info(f"🧹 Cleaned up job: {job_id}")
+        logger.info(f"🧹 Cleaned up job: {job_id}")ob: {job_id}")

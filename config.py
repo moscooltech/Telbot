@@ -26,8 +26,8 @@ IMAGE_HEIGHT = 1280    # Reduced from 1920 (saves 33% memory)
 BYTEZ_API_KEY = os.getenv("BYTEZ_API_KEY", "")
 BYTEZ_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 
-# Video Settings - 30 SECONDS TARGET
-NUM_SCENES = 5                      # 5 scenes × 6 seconds = 30 seconds
+# Video Settings - 40+ SECONDS TARGET
+NUM_SCENES = 8                      # 8 scenes × 6 seconds = 48 seconds
 VIDEO_DURATION_PER_SCENE = 6        # 6 seconds per scene
 ASPECT_RATIO = "9:16"               # TikTok format
 
