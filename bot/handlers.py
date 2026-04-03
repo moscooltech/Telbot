@@ -39,7 +39,7 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Inform user immediately via the normal async context
     await update.message.reply_text(
-        f"🚀 **Job Received!**\nYour video is being processed in the background.\n**ID:** `{{job_id}}`", 
+        f"🚀 **Job Received!**\nYour video is being processed in the background.\n**ID:** `{job_id}`", 
         parse_mode="Markdown"
     )
     
@@ -78,7 +78,7 @@ def run_generation_sync(chat_id, prompt, job_id):
             TelegramAPI.edit_message(
                 chat_id=chat_id,
                 message_id=status_msg_id,
-                text=f"🖼️ **Step 2/5:** Generated {{len(scenes)}} scenes.\nCreating high-quality images..."
+                text=f"🖼️ **Step 2/5:** Generated {len(scenes)} scenes.\nCreating high-quality images..."
             )
         
         # --- PHASE 2: IMAGES ---
@@ -93,7 +93,7 @@ def run_generation_sync(chat_id, prompt, job_id):
                     TelegramAPI.edit_message(
                         chat_id=chat_id,
                         message_id=status_msg_id,
-                        text=f"🖼️ **Step 2/5:** Creating images... ({{i}}/{{len(scenes)}})"
+                        text=f"🖼️ **Step 2/5:** Creating images... ({i}/{len(scenes)})"
                     )
 
         if not image_paths:
@@ -188,7 +188,7 @@ def run_generation_sync(chat_id, prompt, job_id):
         result = TelegramAPI.send_video(
             chat_id=chat_id,
             video_path=final_video,
-            caption=f"{{caption}}\n\n{{hashtags}}"
+            caption=f"{caption}\n\n{hashtags}"
         )
         
         if result and status_msg_id:
@@ -197,14 +197,14 @@ def run_generation_sync(chat_id, prompt, job_id):
         logger.info(f"✨ Job {job_id} finished successfully!")
 
     except Exception as e:
-        logger.error(f"❌ Job {job_id} failed: {{e}}", exc_info=True)
+        logger.error(f"❌ Job {job_id} failed: {e}", exc_info=True)
         TelegramAPI.send_message(
             chat_id=chat_id,
-            text=f"❌ **Generation failed:** {{str(e)}}\nPlease try again."
+            text=f"❌ **Generation failed:** {str(e)}\nPlease try again."
         )
     finally:
         # Clean up temp files
         job_dir = os.path.join(TEMP_DIR, job_id)
         if os.path.exists(job_dir):
             shutil.rmtree(job_dir)
-        logger.info(f"🧹 Cleaned up job: {job_id}")ob: {job_id}")
+        logger.info(f"🧹 Cleaned up job: {job_id}")
