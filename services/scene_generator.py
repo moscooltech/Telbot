@@ -6,14 +6,20 @@ from config import OPENROUTER_API_KEY, OPENROUTER_MODEL, NUM_SCENES, VIDEO_DURAT
 class SceneGenerator:
     def __init__(self):
         self.api_key = OPENROUTER_API_KEY
-        self.model = "google/gemini-2.0-flash-lite-preview-02-05:free" # Fast and free
+        # Use the model from config, fallback to gemini-flash if not set
+        self.model = OPENROUTER_MODEL if OPENROUTER_MODEL else "google/gemini-2.0-flash-lite-preview-02-05:free"
 
     def generate_all(self, prompt, retry=3):
         """
         Generates both scenes and viral metadata in a single API call.
         Returns a tuple: (scenes, narrations, metadata)
         """
-        print(f"🧠 Prompting AI for scenes and metadata: \"{prompt[:30]}...\"")
+        if not self.api_key:
+            print("⚠️ WARNING: OPENROUTER_API_KEY is missing!")
+            return [prompt], [prompt], {"caption": "Error: No API Key", "hashtags": "#error"}
+
+        print(f"🧠 Prompting AI ({self.model}) for scenes: \"{prompt[:30]}...\"")
+
         
         # Adjust scene target based on Render Free Tier constraints
         target_scenes = NUM_SCENES if RENDER_FREE_TIER else 15
