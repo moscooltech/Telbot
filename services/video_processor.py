@@ -62,48 +62,33 @@ class VideoProcessor:
         return output_path
 
     def assemble_video(self, clip_paths, audio_path, srt_path):
-        """Combines clips into a final video with audio and subtitles."""
-        logger.info(f"🎬 Starting assembly for job {self.job_id}...")
+        """
+        Combines clips into a final video with audio and subtitles using FFmpeg.
+        ULTRA-OPTIMIZED for 512MB RAM: Bypasses MoviePy entirely for assembly.
+        """
+        logger.info(f"🎬 Starting ultra-lightweight assembly for job {self.job_id}...")
         
-        clips = []
-        for path in clip_paths:
-            try:
-                if os.path.exists(path):
-                    # Clips are already scaled in create_scene_video
-                    clip = VideoFileClip(path)
-                    clips.append(clip)
-            except Exception as e:
-                logger.error(f"❌ Failed to load clip {path}: {e}")
-
-        if not clips:
-            raise Exception("No valid video clips found for assembly.")
-
         try:
-            # Concatenate (using "chain" for lower RAM than "compose")
-            final_video_clip = concatenate_videoclips(clips, method="chain")
-
-            # Attach audio
-            if audio_path and os.path.exists(audio_path):
-                audio_clip = AudioFileClip(audio_path)
-                if audio_clip.duration > final_video_clip.duration:
-                    audio_clip = audio_clip.subclip(0, final_video_clip.duration)
-                final_video_clip = final_video_clip.set_audio(audio_clip)
-
-            raw_video = os.path.join(self.video_dir, "assembled_no_subs.mp4")
+            # 1. Create a list file for FFmpeg concat demuxer
+            list_file = os.path.join(self.video_dir, "clips_list.txt")
+            with open(list_file, "w") as f:
+                for path in clip_paths:
+                    if os.path.exists(path):
+                        # Use absolute paths to avoid issues
+                        f.write(f"file '{os.path.abspath(path)}'\n")
             
-            # Export with optimized settings
-            final_video_clip.write_videofile(
-                raw_video,
-                codec="libx264",
-                audio_codec="aac",
-                fps=25,
-                threads=FFMPEG_THREADS,
-                preset=FFMPEG_PRESET,
-                logger=None
+            # 2. Intermediate raw concatenation (no re-encoding, extremely fast and low RAM)
+            raw_concat = os.path.join(self.video_dir, "raw_concat.mp4")
+            concat_cmd = (
+                f"ffmpeg -y -f concat -safe 0 -i \"{list_file}\" -c copy \"{raw_concat}\""
             )
+            logger.info("Running fast concatenation...")
+            subprocess.run(concat_cmd, shell=True, check=True, capture_output=True)
 
-            # Burn subtitles using FFmpeg
+            # 3. Final Merge: Add Audio + Burn Subtitles + Re-encode with optimized settings
+            # We do this in ONE pass to minimize disk I/O and CPU spikes
             final_output = os.path.join(self.job_dir, "final_output.mp4")
+            
             # Style optimized for 720p
             subtitle_filter = (
                 f"subtitles='{srt_path}':force_style='Alignment=2,FontSize=12,"
@@ -111,19 +96,31 @@ class VideoProcessor:
                 f"Outline=1,Shadow=0,MarginV=30'"
             )
             
-            cmd = (
-                f"ffmpeg -y -i \"{raw_video}\" -vf \"{subtitle_filter}\" "
-                f"-c:v libx264 -preset {FFMPEG_PRESET} -crf {FFMPEG_CRF} "
-                f"-threads {FFMPEG_THREADS} -c:a copy \"{final_output}\""
-            )
-            subprocess.run(cmd, shell=True, check=True, capture_output=True)
+            # Construct the final command
+            # -shortest ensures the video ends when the shortest stream (usually video) ends
+            if audio_path and os.path.exists(audio_path):
+                cmd = (
+                    f"ffmpeg -y -i \"{raw_concat}\" -i \"{audio_path}\" "
+                    f"-vf \"{subtitle_filter}\" "
+                    f"-c:v libx264 -preset {FFMPEG_PRESET} -crf {FFMPEG_CRF} "
+                    f"-threads {FFMPEG_THREADS} -c:a aac -b:a 128k -shortest \"{final_output}\""
+                )
+            else:
+                cmd = (
+                    f"ffmpeg -y -i \"{raw_concat}\" -vf \"{subtitle_filter}\" "
+                    f"-c:v libx264 -preset {FFMPEG_PRESET} -crf {FFMPEG_CRF} "
+                    f"-threads {FFMPEG_THREADS} \"{final_output}\""
+                )
 
-            # Cleanup
-            for c in clips: c.close()
-            final_video_clip.close()
+            logger.info("Running final merge and subtitle burn...")
+            subprocess.run(cmd, shell=True, check=True, capture_output=True)
+            
+            # Cleanup intermediate raw file immediately to save disk
+            if os.path.exists(raw_concat):
+                os.remove(raw_concat)
             
             return final_output
 
         except Exception as e:
-            logger.error(f"❌ Assembly failed: {e}")
+            logger.error(f"❌ Ultra-lightweight assembly failed: {e}")
             raise e
