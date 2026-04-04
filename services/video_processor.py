@@ -61,7 +61,7 @@ class VideoProcessor:
 
         cmd = (
             f"ffmpeg -y -loop 1 -i \"{image_path}\" "
-            f"-vf \"scale={self.width*2}:{self.height*2}:force_original_aspect_ratio=increase,crop={self.width*2}:{self.height*2},"
+            f"-vf \"scale={self.width}:{self.height}:force_original_aspect_ratio=increase,crop={self.width}:{self.height},"
             f"{chosen_effect},format=yuv420p\" "
             f"-t {duration} -r 25 -c:v libx264 -preset {FFMPEG_PRESET} -crf {FFMPEG_CRF} "
             f"-threads {FFMPEG_THREADS} \"{output_path}\""

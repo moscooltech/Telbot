@@ -3,6 +3,7 @@ import threading
 import time
 import shutil
 import logging
+import gc
 from telegram import Update
 from telegram.ext import ContextTypes
 from services.scene_generator import SceneGenerator
@@ -174,6 +175,9 @@ def run_generation_sync(chat_id, prompt, job_id):
             
         if status_msg_id:
             TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🏗️ **Step 4/5:** Finalizing video assembly (this may take a minute)...")
+        
+        # Free up memory before heavy FFmpeg render
+        gc.collect()
             
         final_video = vp.assemble_video(clip_paths, final_audio, srt_path)
         
