@@ -12,42 +12,38 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+import asyncio
+import aiohttp
+...
 logger = logging.getLogger(__name__)
 
-# Load configuration
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
-PORT = int(os.getenv("PORT", "10000"))
-
-app = FastAPI()
-
-# Bot application initialization
-# We use the token to build the app which will handle command parsing
-bot_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-# Add handlers (these are async and handle the initial request)
-bot_app.add_handler(CommandHandler("start", start))
-bot_app.add_handler(CommandHandler(["generate", "gen"], generate))
+async def keep_alive_pinger():
+    """Background task to keep Render server awake."""
+    url = os.getenv("WEBHOOK_URL", "")
+    if not url:
+        return
+    
+    logger.info("📡 Keep-Alive pinger started.")
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        logger.info("💓 Keep-Alive: Ping successful.")
+        except Exception as e:
+            logger.warning(f"⚠️ Keep-Alive: Ping failed: {e}")
+        
+        # Ping every 14 minutes (Render sleeps after 15)
+        await asyncio.sleep(840)
 
 @app.on_event("startup")
 async def on_startup():
     """Tasks to run when the server starts."""
     if not TELEGRAM_TOKEN:
-        logger.error("❌ TELEGRAM_TOKEN is missing!")
-        return
-
-    # Initialize and start the bot application
-    await bot_app.initialize()
-    await bot_app.start()
-
-    # Set the webhook automatically on startup
-    if WEBHOOK_URL:
-        webhook_path = f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}"
-        logger.info(f"🔗 Setting webhook to: {webhook_path}")
-        await bot_app.bot.set_webhook(url=webhook_path)
-    else:
-        logger.warning("⚠️ WEBHOOK_URL is not set. Webhook will not be registered automatically.")
-
+...
     logger.info("🚀 Webhook service is ready!")
+    # Start the pinger in the background
+    asyncio.create_task(keep_alive_pinger())
 
 @app.on_event("shutdown")
 async def on_shutdown():

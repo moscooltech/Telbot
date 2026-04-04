@@ -42,29 +42,39 @@ class VideoProcessor:
         return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
 
     def create_scene_video(self, image_path, duration, index):
-        """Creates a short video clip for a single image with a LIGHT Ken Burns effect."""
+        """Creates a short video clip with RANDOM cinematic motion (Ken Burns)."""
         output_path = os.path.join(self.video_dir, f"clip_{index:03d}.mp4")
+        import random
         
-        # LIGHTWEIGHT Ken Burns:
-        # 1. Scale to target size
-        # 2. Subtle zoompan (reduced complexity)
-        # 3. Use config-driven threads and preset
+        # Randomly choose one of 4 motion effects
+        # Optimized for 720p and low CPU
+        effects = [
+            # Zoom In
+            f"zoompan=z='min(zoom+0.001,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={int(duration*25)}:s={self.width}x{self.height}",
+            # Zoom Out
+            f"zoompan=z='max(1.3-0.001*on,1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={int(duration*25)}:s={self.width}x{self.height}",
+            # Pan Left to Right
+            f"zoompan=z=1.2:x='if(lte(on,1),(iw-iw/zoom)/2,x+0.5)':y='(ih-ih/zoom)/2':d={int(duration*25)}:s={self.width}x{self.height}",
+            # Pan Right to Left
+            f"zoompan=z=1.2:x='if(lte(on,1),(iw-iw/zoom),x-0.5)':y='(ih-ih/zoom)/2':d={int(duration*25)}:s={self.width}x{self.height}"
+        ]
+        chosen_effect = random.choice(effects)
+
         cmd = (
             f"ffmpeg -y -loop 1 -i \"{image_path}\" "
-            f"-vf \"scale={self.width}:{self.height}:force_original_aspect_ratio=increase,crop={self.width}:{self.height},"
-            f"zoompan=z='min(zoom+0.001,1.2)':d={int(duration*25)}:s={self.width}x{self.height},format=yuv420p\" "
+            f"-vf \"scale={self.width*2}:{self.height*2}:force_original_aspect_ratio=increase,crop={self.width*2}:{self.height*2},"
+            f"{chosen_effect},format=yuv420p\" "
             f"-t {duration} -r 25 -c:v libx264 -preset {FFMPEG_PRESET} -crf {FFMPEG_CRF} "
             f"-threads {FFMPEG_THREADS} \"{output_path}\""
         )
         
-        logger.info(f"Generating clip {index} with ffmpeg...")
+        logger.info(f"Generating clip {index} with effect...")
         subprocess.run(cmd, shell=True, check=True, capture_output=True)
         return output_path
 
     def assemble_video(self, clip_paths, audio_path, srt_path):
         """
-        Combines clips into a final video with audio and subtitles using FFmpeg.
-        ULTRA-OPTIMIZED for 512MB RAM: Bypasses MoviePy entirely for assembly.
+        Combines clips into a final video with audio and BOLD subtitles.
         """
         logger.info(f"🎬 Starting ultra-lightweight assembly for job {self.job_id}...")
         
@@ -74,30 +84,25 @@ class VideoProcessor:
             with open(list_file, "w") as f:
                 for path in clip_paths:
                     if os.path.exists(path):
-                        # Use absolute paths to avoid issues
                         f.write(f"file '{os.path.abspath(path)}'\n")
             
-            # 2. Intermediate raw concatenation (no re-encoding, extremely fast and low RAM)
+            # 2. Intermediate raw concatenation
             raw_concat = os.path.join(self.video_dir, "raw_concat.mp4")
             concat_cmd = (
                 f"ffmpeg -y -f concat -safe 0 -i \"{list_file}\" -c copy \"{raw_concat}\""
             )
-            logger.info("Running fast concatenation...")
             subprocess.run(concat_cmd, shell=True, check=True, capture_output=True)
 
-            # 3. Final Merge: Add Audio + Burn Subtitles + Re-encode with optimized settings
-            # We do this in ONE pass to minimize disk I/O and CPU spikes
+            # 3. Final Merge: Yellow Text + Black Shadow Box (BorderStyle=3)
             final_output = os.path.join(self.job_dir, "final_output.mp4")
             
-            # Style optimized for 720p
+            # Professional TikTok Style: Yellow text with black box
             subtitle_filter = (
-                f"subtitles='{srt_path}':force_style='Alignment=2,FontSize=12,"
-                f"PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,"
-                f"Outline=1,Shadow=0,MarginV=30'"
+                f"subtitles='{srt_path}':force_style='Alignment=2,FontSize=14,"
+                f"PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,BorderStyle=3,"
+                f"Outline=1,Shadow=1,MarginV=50'"
             )
             
-            # Construct the final command
-            # -shortest ensures the video ends when the shortest stream (usually video) ends
             if audio_path and os.path.exists(audio_path):
                 cmd = (
                     f"ffmpeg -y -i \"{raw_concat}\" -i \"{audio_path}\" "
@@ -112,13 +117,8 @@ class VideoProcessor:
                     f"-threads {FFMPEG_THREADS} \"{final_output}\""
                 )
 
-            logger.info("Running final merge and subtitle burn...")
             subprocess.run(cmd, shell=True, check=True, capture_output=True)
-            
-            # Cleanup intermediate raw file immediately to save disk
-            if os.path.exists(raw_concat):
-                os.remove(raw_concat)
-            
+            if os.path.exists(raw_concat): os.remove(raw_concat)
             return final_output
 
         except Exception as e:
