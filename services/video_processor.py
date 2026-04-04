@@ -1,7 +1,6 @@
 import os
 import subprocess
 import logging
-from moviepy import VideoFileClip, AudioFileClip, CompositeAudioClip, concatenate_videoclips
 from config import TEMP_DIR, IMAGE_WIDTH, IMAGE_HEIGHT, FFMPEG_PRESET, FFMPEG_CRF, FFMPEG_THREADS
 
 logger = logging.getLogger(__name__)
