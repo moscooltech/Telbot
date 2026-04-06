@@ -22,6 +22,8 @@ Your task: Convert the user's prompt into a high-quality educational/viral video
 Requirements:
 - Write a UNIQUE narration script for EACH of the {MIN_SCENES} to {MAX_SCENES} scenes
 - Each narration must be DIFFERENT from the others - never repeat the same phrasing
+- NEVER include "scene 1", "scene 2", "step 1", "step 2" or any scene/step numbers in the narration text
+- The narration should be pure content/educational text only - no scene references
 - Scene 1: Introduce the topic with a hook
 - Scene 2-7: Expand with different explanations and examples  
 - Scene 8: Conclude with a call to action
@@ -34,11 +36,11 @@ Output format: JSON ONLY with unique narrations for each scene.
 {{
   "scenes": [
     {{
-      "spoken_script": "Unique narration for scene 1 - different from all others",
+      "spoken_script": "Pure narration content - NO scene/step numbers",
       "visual_prompt": "Visual description for scene 1"
     }},
     {{
-      "spoken_script": "Different narration for scene 2 - with fresh wording",
+      "spoken_script": "Different narration content - NO scene/step numbers",
       "visual_prompt": "Visual description for scene 2"
     }},
     ...
@@ -113,7 +115,5 @@ Output format: JSON ONLY with unique narrations for each scene.
                 if attempt < retry - 1:
                     time.sleep(3)
                 else:
-                    # Dynamic Technical Fallback (ensures it's never just the prompt)
-                    fallback_visuals = [f"Educational infographic about {prompt}, phase {i+1}" for i in range(MIN_SCENES)]
-                    fallback_narrations = [f"Step {i+1}: Let us explore the fundamentals of {prompt}. We begin by examining the key concepts and building blocks that form the foundation." for i in range(MIN_SCENES)]
-                    return fallback_visuals, fallback_narrations, {"caption": prompt, "hashtags": "#learning"}
+                    # Fail gracefully instead of generating fake content
+                    raise Exception(f"AI Director failed after {retry} attempts: {e}")

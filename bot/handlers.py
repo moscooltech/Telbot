@@ -119,6 +119,23 @@ def run_generation_sync(chat_id, prompt, job_id):
                 # Add a variation if repeated
                 unique_narrations.append(f"{n} (part {len(unique_narrations)+1})")
         
+        # Validate narrations before generating audio
+        if not unique_narrations:
+            raise Exception("No narrations received from AI")
+        
+        import re
+        scene_step_pattern = re.compile(r'\b(scene|step|phase|part)\s*\d+', re.IGNORECASE)
+        for idx, n in enumerate(unique_narrations):
+            if not n or not n.strip():
+                raise Exception(f"Narration {idx+1} is empty")
+            if scene_step_pattern.search(n):
+                raise Exception(f"Narration {idx+1} contains scene/step reference: '{n[:50]}...'")
+        
+        # Check uniqueness (at least 70% should be unique)
+        unique_count = len(set(n.lower().strip() for n in unique_narrations if n))
+        if unique_count < len(unique_narrations) * 0.7:
+            raise Exception(f"Narrations are too repetitive (only {unique_count} unique out of {len(unique_narrations)})")
+        
         num_narrations = len(unique_narrations)
         for i, narration_text in enumerate(unique_narrations):
             if status_msg_id:
