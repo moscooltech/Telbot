@@ -22,8 +22,8 @@ class SceneGenerator:
         Step 1: Analyze the depth of the story.
         Step 2: Decide on the optimal number of scenes between {MIN_SCENES} and {MAX_SCENES}.
         Step 3: For each scene, create:
-           - A 'scene' description: A hyper-detailed visual prompt for an image generator (lighting, camera, textures).
-           - A 'narration' script: A 15-20 word spoken script that perfectly matches the visual.
+           - A 'scene' description: A hyper-detailed visual prompt for an image generator (lighting, camera, textures). An infographic would be a good idea for any scenes that is gor explanation of something. 
+           - A 'narration' script: A 15-20 word spoken script that perfectly matches the visual. the narration should be good for a video sn not just some useless words.
         
         Style Detection: If the user provides a style like [Anime] or [Cinematic], apply it strictly.
         
