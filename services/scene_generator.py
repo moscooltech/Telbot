@@ -62,36 +62,58 @@ class SceneGenerator:
                 response.raise_for_status()
                 content = response.json()['choices'][0]['message']['content']
                 
-                # Robust JSON extraction (removes markdown code blocks if AI adds them)
-                if "```json" in content:
-                    content = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content:
-                    content = content.split("```")[1].split("```")[0].strip()
-                
-                data = json.loads(content)
+                # HYPER-ROBUST JSON EXTRACTION
+                # 1. Try to find the first '{' and last '}'
+                try:
+                    start_idx = content.find('{')
+                    end_idx = content.rfind('}') + 1
+                    if start_idx != -1 and end_idx != -1:
+                        json_str = content[start_idx:end_idx]
+                        data = json.loads(json_str)
+                    else:
+                        raise ValueError("No JSON braces found")
+                except:
+                    # 2. Fallback to regex-like split if braces fail
+                    if "```json" in content:
+                        content = content.split("```json")[1].split("```")[0].strip()
+                    data = json.loads(content)
+
                 scenes = data.get("scenes", [])
                 narrations = data.get("narrations", [])
                 
                 # Sync check: ensure we have equal counts
                 count = min(len(scenes), len(narrations))
+                
+                # AGENTIC QUALITY CHECK: 
+                # If the AI just echoed the prompt back for all scenes, treat it as a failure
+                if count > 0 and all(s.strip().lower() == prompt.strip().lower() for s in narrations):
+                    raise Exception("AI echoed the prompt instead of writing a script.")
+
                 if count < MIN_SCENES:
                     raise Exception(f"AI returned too few scenes: {count}")
                 
                 metadata = {
-                    "caption": data.get("caption", "Amazing story!"),
-                    "hashtags": " ".join(data.get("hashtags", ["#fyp", "#viral"]))
+                    "caption": data.get("caption", f"The Story of {prompt[:20]}"),
+                    "hashtags": " ".join(data.get("hashtags", ["#ai", "#learning", "#viral"]))
                 }
                 
-                print(f"✅ AI Director planned {count} scenes.")
+                print(f"✅ AI Director planned {count} unique scenes.")
                 return scenes[:count], narrations[:count], metadata
                 
             except Exception as e:
                 print(f"❌ SceneGenerator failed (Attempt {attempt+1}): {e}")
-                if "content" in locals(): print(f"Raw AI Output: {content[:200]}...")
                 if attempt < retry - 1:
                     time.sleep(2)
                 else:
-                    # Robust fallback: use prompt but repeat it to ensure video length isn't 3s
-                    fallback_scenes = [f"{prompt}, high quality cinematic scene {i}" for i in range(MIN_SCENES)]
-                    fallback_narrations = [f"Scene {i+1}: {prompt[:50]}..." for i in range(MIN_SCENES)]
-                    return fallback_scenes, fallback_narrations, {"caption": prompt[:30], "hashtags": "#viral"}
+                    # DYNAMIC FALLBACK: If AI fails, we write a basic story ourselves 
+                    # so it's NOT just the prompt repeating.
+                    print("⚠️ Using Dynamic Story Fallback Engine")
+                    fallback_scenes = [
+                        f"Cinematic shot of {prompt}, perspective {i+1}, highly detailed" 
+                        for i in range(MIN_SCENES)
+                    ]
+                    fallback_narrations = [
+                        f"Imagine a world where {prompt} takes center stage. This is part {i+1} of our journey into the unknown."
+                        for i in range(MIN_SCENES)
+                    ]
+                    return fallback_scenes, fallback_narrations, {"caption": prompt, "hashtags": "#ai #viral"}
