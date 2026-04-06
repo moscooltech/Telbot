@@ -108,8 +108,19 @@ def run_generation_sync(chat_id, prompt, job_id):
         narration_paths = []
         durations = []
         
-        num_narrations = len(image_paths)
-        for i, narration_text in enumerate(narrations[:num_narrations]):
+        # Ensure unique narrations per scene
+        unique_narrations = []
+        seen = set()
+        for n in narrations[:len(image_paths)]:
+            if n and n not in seen:
+                unique_narrations.append(n)
+                seen.add(n)
+            elif n:
+                # Add a variation if repeated
+                unique_narrations.append(f"{n} (part {len(unique_narrations)+1})")
+        
+        num_narrations = len(unique_narrations)
+        for i, narration_text in enumerate(unique_narrations):
             if status_msg_id:
                 TelegramAPI.edit_message(
                     chat_id=chat_id, 
@@ -159,12 +170,12 @@ def run_generation_sync(chat_id, prompt, job_id):
         
         # --- PHASE 4: VIDEO ---
         vp = VideoProcessor(job_id)
-        srt_path = vp.generate_srt(scenes[:len(image_paths)], durations)
+        srt_path = vp.generate_srt(unique_narrations[:len(image_paths)], durations)
         
         clip_paths = []
         num_clips = len(image_paths)
-        # Use the planned narrations for the burned-in subtitles
-        for i, (img_path, dur, narration_text) in enumerate(zip(image_paths, durations, narrations)):
+        # Use the unique narrations for the burned-in subtitles
+        for i, (img_path, dur, narration_text) in enumerate(zip(image_paths, durations, unique_narrations)):
             if status_msg_id:
                 TelegramAPI.edit_message(
                     chat_id=chat_id, 

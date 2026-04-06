@@ -16,29 +16,37 @@ class SceneGenerator:
             return [prompt]*MIN_SCENES, [prompt]*MIN_SCENES, {"caption": "No Key", "hashtags": "#error"}
 
         system_prompt = f"""
-        You are a Professional AI Video Producer and Lead Educator.
-        Your task: Convert the user's prompt into a high-quality educational/viral video script.
-        
-        Step 1: Write a deep, narrative script (NOT a summary).
-        Step 2: Divide it into {MIN_SCENES} to {MAX_SCENES} logical scenes.
-        Step 3: For each scene, provide:
-           - "spoken_script": A 20-30 word professional narration.
-           - "visual_prompt": A visual description. IMPORTANT: For technical topics, use Infographics, 3D Diagrams, Textual Overlays, or Explainer Visuals. 
-             Example: "An infographic showing a decision tree growing into a forest, high quality digital art, labels: RandomForest."
-        
-        Output format: JSON ONLY.
-        {{
-          "scenes": [
-            {{
-              "spoken_script": "The actual words to be said",
-              "visual_prompt": "Hyper-detailed visual description"
-            }},
-            ...
-          ],
-          "caption": "Viral hook",
-          "hashtags": ["tag1", "tag2"]
-        }}
-        """
+You are a Professional AI Video Producer and Lead Educator.
+Your task: Convert the user's prompt into a high-quality educational/viral video script.
+
+Requirements:
+- Write a UNIQUE narration script for EACH of the {MIN_SCENES} to {MAX_SCENES} scenes
+- Each narration must be DIFFERENT from the others - never repeat the same phrasing
+- Scene 1: Introduce the topic with a hook
+- Scene 2-7: Expand with different explanations and examples  
+- Scene 8: Conclude with a call to action
+- Each spoken_script should be 20-30 words, written as natural spoken text
+
+For visuals, use:
+- "visual_prompt": Describe what appears on screen (infographics, diagrams, text overlays)
+
+Output format: JSON ONLY with unique narrations for each scene.
+{{
+  "scenes": [
+    {{
+      "spoken_script": "Unique narration for scene 1 - different from all others",
+      "visual_prompt": "Visual description for scene 1"
+    }},
+    {{
+      "spoken_script": "Different narration for scene 2 - with fresh wording",
+      "visual_prompt": "Visual description for scene 2"
+    }},
+    ...
+  ],
+  "caption": "Viral hook",
+  "hashtags": ["tag1", "tag2"]
+}}
+"""
         
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -86,6 +94,11 @@ class SceneGenerator:
                 # LAZY RESPONSE CHECK: If narration is just the prompt repeated, fail and retry
                 if any(prompt.strip().lower() in n.strip().lower() and len(n) < len(prompt) + 10 for n in narrations):
                     raise Exception("AI Director was lazy and echoed the prompt. Retrying...")
+                
+                # UNIQUENESS CHECK: Ensure each narration is different
+                unique_narrations = set(n.lower().strip() for n in narrations if n)
+                if len(unique_narrations) < len(narrations) * 0.7:  # At least 70% should be unique
+                    raise Exception("AI Director returned repetitive narrations. Retrying...")
 
                 metadata = {
                     "caption": data.get("caption", prompt[:30]),
@@ -102,5 +115,5 @@ class SceneGenerator:
                 else:
                     # Dynamic Technical Fallback (ensures it's never just the prompt)
                     fallback_visuals = [f"Educational infographic about {prompt}, phase {i+1}" for i in range(MIN_SCENES)]
-                    fallback_narrations = [f"This step explains {prompt}. We analyze the core components to understand the system architecture in detail." for i in range(MIN_SCENES)]
+                    fallback_narrations = [f"Step {i+1}: Let us explore the fundamentals of {prompt}. We begin by examining the key concepts and building blocks that form the foundation." for i in range(MIN_SCENES)]
                     return fallback_visuals, fallback_narrations, {"caption": prompt, "hashtags": "#learning"}

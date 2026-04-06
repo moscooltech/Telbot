@@ -2,9 +2,8 @@ import os
 import requests
 import random
 import time
-import base64
-from typing import List, Optional, Dict, Any
-from config import POLLINATIONS_URL, POLLINATIONS_API_KEY, TEMP_DIR, BYTEZ_API_KEY, BYTEZ_MODEL
+from typing import List, Optional
+from config import POLLINATIONS_API_KEY, TEMP_DIR
 
 
 class ImageGenerator:
@@ -12,6 +11,8 @@ class ImageGenerator:
         self.job_id = job_id
         self.job_dir = os.path.join(TEMP_DIR, job_id)
         self.image_dir = os.path.join(self.job_dir, "images")
+        self.width = 720
+        self.height = 1280
 
         # Create directories
         os.makedirs(self.image_dir, exist_ok=True)
@@ -29,85 +30,50 @@ class ImageGenerator:
 
     def generate_image(self, prompt: str, index: int, retry: int = 2) -> Optional[str]:
         """
-        Generates a single image using Pollinations with fallback to Bytez.
+        Generates a single image using Pollinations with improved prompting.
         """
         clean_prompt = self._clean_prompt(prompt)
+        # Enhance prompt for better quality
+        enhanced_prompt = f"{clean_prompt}, high quality, detailed, professional, 4k"
         filepath = os.path.join(self.image_dir, f"scene_{index:03d}.jpg")
 
-        # 1. TRY POLLINATIONS (Primary - Free and Fast)
-        print(f"🖼️ [Scene {index}] Attempting Pollinations AI...")
-        
-        # Format URL for requests params handling
-        base_url = POLLINATIONS_URL.format(prompt=requests.utils.quote(clean_prompt))
+        print(f"🖼️ [Scene {index}] Generating image for: {clean_prompt[:50]}...")
         
         headers = {}
         if POLLINATIONS_API_KEY:
             headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
 
-        for attempt in range(1, retry + 1):
-            try:
-                params = {
-                    "model": "flux",
-                    "width": 1080,
-                    "height": 1920,
-                    "seed": random.randint(0, 1000000),
-                    "nologo": "true"
-                }
-                
-                response = requests.get(base_url, params=params, headers=headers, timeout=45)
-                
-                if response.status_code == 200 and len(response.content) > 5000:
-                    with open(filepath, "wb") as f:
-                        f.write(response.content)
-                    print(f"✅ [Scene {index}] Pollinations success!")
-                    return filepath
-                else:
-                    print(f"⚠️ [Scene {index}] Pollinations attempt {attempt} returned status {response.status_code} or small file.")
-            except Exception as e:
-                print(f"⚠️ [Scene {index}] Pollinations attempt {attempt} failed: {e}")
-                time.sleep(1)
-
-        # 2. FALLBACK TO BYTEZ (Secondary)
-        if BYTEZ_API_KEY:
-            print(f"🖼️ [Scene {index}] Falling back to Bytez SDK...")
-            try:
-                from bytez import Bytez
-                
-                # Initialize SDK
-                sdk = Bytez(BYTEZ_API_KEY)
-                # Load the specified model
-                model = sdk.model(BYTEZ_MODEL)
-                
-                # Run with input prompt
-                # Note: The SDK returns a results object with .error and .output
-                results = model.run(clean_prompt)
-                
-                if results.error:
-                    raise Exception(f"Bytez SDK Error: {results.error}")
-                
-                output = results.output
-                if output:
-                    # Handle possible output formats (URL or Base64)
-                    if isinstance(output, str):
-                        if output.startswith("http"):
-                            img_res = requests.get(output, timeout=30)
-                            img_data = img_res.content
-                        elif "," in output: # Base64 URI
-                            img_data = base64.b64decode(output.split(",")[1])
-                        else: # Raw base64
-                            img_data = base64.b64decode(output)
+        # Try flux dev for better quality (free tier model)
+        models = ["flux-dev", "flux"]
+        
+        for model in models:
+            for attempt in range(1, retry + 1):
+                try:
+                    # Build URL with proper parameters
+                    params = {
+                        "model": model,
+                        "width": self.width,
+                        "height": self.height,
+                        "seed": random.randint(0, 1000000),
+                        "nologo": "true",
+                        "enhance": "true"
+                    }
+                    
+                    url = f"https://gen.pollinations.ai/image/{requests.utils.quote(enhanced_prompt)}"
+                    response = requests.get(url, params=params, headers=headers, timeout=60)
+                    
+                    if response.status_code == 200 and len(response.content) > 5000:
+                        with open(filepath, "wb") as f:
+                            f.write(response.content)
+                        print(f"✅ [Scene {index}] Success with model {model}!")
+                        return filepath
                     else:
-                        # Sometimes SDKs return bytes directly
-                        img_data = output
-                        
-                    with open(filepath, "wb") as f:
-                        f.write(img_data)
-                    print(f"✅ [Scene {index}] Bytez SDK success!")
-                    return filepath
-            except Exception as e:
-                print(f"❌ [Scene {index}] Bytez SDK fallback failed: {e}")
-
-        print(f"🚫 [Scene {index}] Image generation completely failed.")
+                        print(f"⚠️ [Scene {index}] Model {model} attempt {attempt} returned {response.status_code}")
+                except Exception as e:
+                    print(f"⚠️ [Scene {index}] Model {model} attempt {attempt} failed: {e}")
+                    time.sleep(1)
+        
+        print(f"🚫 [Scene {index}] Image generation failed.")
         return None
 
     def generate_all_images(self, scenes: List[str]) -> List[str]:
