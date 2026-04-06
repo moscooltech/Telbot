@@ -18,6 +18,7 @@ class AudioProcessor:
     def generate_single_narration(self, text, index):
         """Generates a single narration file and returns (path, duration)."""
         try:
+            logger.info(f"🎙️ Generating audio for index {index}: '{text[:50]}...'")
             filepath = os.path.join(self.audio_dir, f"scene_{index:03d}.mp3")
             # Generate TTS
             tts = gTTS(text=text, lang='en', slow=False)
@@ -52,7 +53,9 @@ class AudioProcessor:
             list_file_path = os.path.join(self.audio_dir, "concat_list.txt")
             with open(list_file_path, "w") as f:
                 for path in narration_paths:
-                    f.write(f"file '{os.path.abspath(path)}'\n")
+                    abs_path = os.path.abspath(path)
+                    logger.info(f"🎵 Adding to merge: {abs_path}")
+                    f.write(f"file '{abs_path}'\n")
             
             # Run ffmpeg concat
             cmd = f"ffmpeg -y -f concat -safe 0 -i \"{list_file_path}\" -c copy \"{final_audio_path}\""
