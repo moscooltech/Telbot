@@ -163,14 +163,16 @@ def run_generation_sync(chat_id, prompt, job_id):
         
         clip_paths = []
         num_clips = len(image_paths)
-        for i, (img_path, dur) in enumerate(zip(image_paths, durations)):
+        # Use the planned narrations for the burned-in subtitles
+        for i, (img_path, dur, narration_text) in enumerate(zip(image_paths, durations, narrations)):
             if status_msg_id:
                 TelegramAPI.edit_message(
                     chat_id=chat_id, 
                     message_id=status_msg_id,
                     text=f"🎬 **Step 4/5:** Processing video clips... ({i+1}/{num_clips})"
                 )
-            clip = vp.create_scene_video(img_path, dur, i)
+            # Pass narration_text to be burned into the clip
+            clip = vp.create_scene_video(img_path, dur, i, narration_text)
             clip_paths.append(clip)
             
         if status_msg_id:
