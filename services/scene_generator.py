@@ -1,20 +1,17 @@
 import json
 import requests
 import time
-from config import OPENROUTER_API_KEY, OPENROUTER_MODEL, MIN_SCENES, MAX_SCENES, VIDEO_DURATION_PER_SCENE, RENDER_FREE_TIER
+from config import MIN_SCENES, MAX_SCENES, VIDEO_DURATION_PER_SCENE, RENDER_FREE_TIER
+from services.llm_service import LLMService
 
 class SceneGenerator:
     def __init__(self):
-        self.api_key = OPENROUTER_API_KEY
-        self.model = OPENROUTER_MODEL if OPENROUTER_MODEL else "google/gemini-2.0-flash-lite-preview-02-05:free"
+        self.llm = LLMService()
 
     def generate_all(self, prompt, retry=3):
         """
         AI Production Agent: Writes a full professional script and plans explainer visuals.
         """
-        if not self.api_key:
-            return [prompt]*MIN_SCENES, [prompt]*MIN_SCENES, {"caption": "No Key", "hashtags": "#error"}
-
         system_prompt = f"""
 You are a Professional AI Video Producer and Lead Educator.
 Your task: Convert the user's prompt into a high-quality educational/viral video script.
@@ -50,30 +47,13 @@ Output format: JSON ONLY with unique narrations for each scene.
 }}
 """
         
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "X-Title": "Video Explainer Agent"
-        }
-        
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Topic: {prompt}"}
-            ]
-        }
-        
         for attempt in range(retry):
             try:
-                response = requests.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
+                content = self.llm.generate_text(
+                    system_prompt=system_prompt,
+                    user_prompt=f"Topic: {prompt}",
                     timeout=60
                 )
-                response.raise_for_status()
-                content = response.json()['choices'][0]['message']['content']
                 
                 # Hyper-robust JSON extraction
                 try:

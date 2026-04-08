@@ -1,14 +1,22 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Telegram Bot Token
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 
-# OpenRouter API Key (Free tier)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = "google/gemini-2.0-flash-lite-preview-02-05:free"
+# LLM Provider API Keys
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
+BYTEZ_API_KEY = os.getenv("BYTEZ_API_KEY", "")
+
+# Default Models
+GROQ_MODEL = "llama-3.3-70b-versatile"
+GEMINI_MODEL = "gemini-1.5-flash"
+POLLINATIONS_MODEL = "openai"
+BYTEZ_MODEL = "google/gemma-2-9b-it" # Standard LLM fallback
 
 # Directories
 TEMP_DIR = "temp"
