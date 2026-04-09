@@ -1,8 +1,37 @@
 import json
+import re
 import requests
 import time
 from config import MIN_SCENES, MAX_SCENES, VIDEO_DURATION_PER_SCENE, RENDER_FREE_TIER
 from services.llm_service import LLMService
+
+def clean_narration(text):
+    """Clean and fix common punctuation issues in generated text."""
+    if not text:
+        return text
+    
+    # Fix missing spaces between words (e.g., "andgood" -> "and good")
+    # Common word combinations that often get concatenated
+    connectors = ['and', 'or', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'to', 'of', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'that', 'this', 'it', 'as', 'be', 'have', 'has', 'had', 'but', 'not', 'you', 'we', 'they', 'can', 'will', 'do', 'does', 'did']
+    for word in connectors:
+        # Fix "word"+connector or "connector"+"nextword"
+        text = re.sub(rf'{word}([a-z])', f'{word} \\1', text, flags=re.IGNORECASE)
+        text = re.sub(rf'([a-z]){word}', f'\\1 {word}', text, flags=re.IGNORECASE)
+    
+    # Fix missing spaces between lowercase words (e.g., "greatvideo" -> "great video")
+    # This catches when a word ends with certain common patterns
+    text = re.sub(r'(?<=[a-z])(?=[a-z])([A-Z])', r' \1', text)
+    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+    
+    # Fix spacing around punctuation
+    text = re.sub(r'\s+', ' ', text)  # normalize whitespace
+    text = re.sub(r'\s*,\s*', ', ', text)
+    text = re.sub(r'\s*\.\s*', '. ', text)
+    
+    # Ensure proper spacing after periods
+    text = re.sub(r'\.([A-Z])', r'. \1', text)
+    
+    return text.strip()
 
 class SceneGenerator:
     def __init__(self):
@@ -63,7 +92,7 @@ Output JSON ONLY:
 
                 # Map the new keys: narration and description
                 visuals = [s.get("description", s.get("visual_prompt", "")) for s in raw_scenes]
-                narrations = [s.get("narration", s.get("spoken_script", "")) for s in raw_scenes]
+                narrations = [clean_narration(s.get("narration", s.get("spoken_script", ""))) for s in raw_scenes]
                 
                 # LAZY RESPONSE CHECK: If narration is just the prompt repeated, fail and retry
                 if any(prompt.strip().lower() in n.strip().lower() and len(n) < len(prompt) + 10 for n in narrations):

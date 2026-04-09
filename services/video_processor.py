@@ -36,8 +36,7 @@ class VideoProcessor:
 
     def create_scene_video(self, image_path, duration, index, text):
         """
-        Creates a short video clip with SUBTITLES BURNED IN.
-        Burning at the clip level prevents OOM crashes during final assembly.
+        Creates a short video clip with TikTok-style SUBTITLES BURNED IN.
         """
         import textwrap
         output_path = os.path.join(self.video_dir, f"clip_{index:03d}.mp4")
@@ -45,21 +44,21 @@ class VideoProcessor:
         # Clean text for FFmpeg drawtext filter
         clean_text = text.replace("'", "").replace(":", "").replace('"', "")
         
-        # Auto-wrap: 15 chars per line for proper line breaks
-        wrapped_lines = textwrap.wrap(clean_text, width=15)
+        # Smart wrap: break at word boundaries, max 22 chars per line for large text
+        wrapped_lines = textwrap.wrap(clean_text, width=22, break_long_words=False, break_on_hyphens=False)
         
         # Build multi-line text with newline separator
         wrapped_text = "\\n".join(wrapped_lines)
         num_lines = len(wrapped_lines)
         
-        # Position: 120px from bottom, centered horizontally
-        margin_bottom = 120
+        # TikTok style: position lower third, centered
+        margin_bottom = 180
         
-        # Subtitles: white with black outline, no external font file needed
+        # Large white text with black outline (TikTok style)
         drawtext_filter = (
-            f"drawtext=text='{wrapped_text}':fontcolor=white:fontsize=35:"
+            f"drawtext=text='{wrapped_text}':fontcolor=white:fontsize=48:"
             f"x=(w-text_w)/2:y=h-th-{margin_bottom}:"
-            f"borderw=2:bordercolor=black"
+            f"borderw=4:bordercolor=black"
         )
 
         cmd = (
@@ -70,7 +69,7 @@ class VideoProcessor:
             f"-threads 1 \"{output_path}\""
         )
         
-        logger.info(f"Rendering sub-clip {index} with text: {clean_text[:30]}...")
+        logger.info(f"Rendering sub-clip {index} with {num_lines} lines, text: {clean_text[:40]}...")
         subprocess.run(cmd, shell=True, check=True, capture_output=True)
         return output_path
 
