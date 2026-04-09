@@ -42,14 +42,17 @@ class VideoProcessor:
         
         # Clean text for FFmpeg drawtext filter
         clean_text = text.replace("'", "").replace(":", "").replace('"', "")
-        # Wrap text every 40 characters for readability
-        wrapped_text = "\\\n".join([clean_text[i:i+40] for i in range(0, len(clean_text), 40)])
+        
+        # Professional word-wrap: 30 chars per line fits 720p width nicely at fontsize 36
+        wrapped_lines = textwrap.wrap(clean_text, width=30)
+        wrapped_text = "\\\n".join(wrapped_lines)
 
         # Optimization: Use drawtext instead of subtitles filter (faster, lower RAM)
-        # Fontsize 24 is good for 720p. Yellow text with black box.
+        # y=h-th-150 dynamically places the block 150px from bottom regardless of line count
         drawtext_filter = (
-            f"drawtext=text='{wrapped_text}':fontcolor=yellow:fontsize=24:"
-            f"x=(w-text_w)/2:y=h-100:box=1:boxcolor=black@0.6:boxborderw=10"
+            f"drawtext=text='{wrapped_text}':fontcolor=yellow:fontsize=36:fontfile=bold:"
+            f"x=(w-text_w)/2:y=h-th-150:box=1:boxcolor=black@0.5:boxborderw=10:"
+            f"shadowcolor=black@0.4:shadowx=2:shadowy=2"
         )
 
         cmd = (
