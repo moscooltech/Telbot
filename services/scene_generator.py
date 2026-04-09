@@ -10,21 +10,27 @@ def clean_narration(text):
     if not text:
         return text
     
+    # Fix "e a c h" -> "each" (single letters separated by spaces)
+    # This handles the specific case where LLM outputs letter-by-letter with spaces
+    def fix_spaced_letters(match):
+        letters = match.group(1).replace(' ', '')
+        return letters
+    
+    # Match sequences of single letters separated by spaces (2+ letters)
+    text = re.sub(r'\b([a-z](?:\s[a-z]){2,})\b', fix_spaced_letters, text, flags=re.IGNORECASE)
+    
     # Fix missing spaces between words (e.g., "andgood" -> "and good")
-    # Common word combinations that often get concatenated
     connectors = ['and', 'or', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'to', 'of', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'that', 'this', 'it', 'as', 'be', 'have', 'has', 'had', 'but', 'not', 'you', 'we', 'they', 'can', 'will', 'do', 'does', 'did']
     for word in connectors:
-        # Fix "word"+connector or "connector"+"nextword"
         text = re.sub(rf'{word}([a-z])', f'{word} \\1', text, flags=re.IGNORECASE)
         text = re.sub(rf'([a-z]){word}', f'\\1 {word}', text, flags=re.IGNORECASE)
     
-    # Fix missing spaces between lowercase words (e.g., "greatvideo" -> "great video")
-    # This catches when a word ends with certain common patterns
+    # Fix missing spaces between lowercase words
     text = re.sub(r'(?<=[a-z])(?=[a-z])([A-Z])', r' \1', text)
     text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
     
     # Fix spacing around punctuation
-    text = re.sub(r'\s+', ' ', text)  # normalize whitespace
+    text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'\s*,\s*', ', ', text)
     text = re.sub(r'\s*\.\s*', '. ', text)
     
@@ -51,6 +57,7 @@ Requirements:
 - "description": What is shown visually. Detailed scene description for an image generator.
 - NEVER include "scene 1", "scene 2", "step 1", or any numbering in the narration.
 - ALWAYS use proper spacing between words. Never concatenate words together (e.g., "andgood" is WRONG, "and good" is CORRECT).
+- NEVER add spaces between letters in words (e.g., "e a c h" is WRONG, "each" is CORRECT).
 - Use proper punctuation: periods, commas, and capital letters after periods.
 - Scene 1: Strong hook.
 - Scene 2-7: Educational/story content.
