@@ -55,16 +55,23 @@ class AudioProcessor:
             voice = MALE_VOICES["jason"]
             logger.info(f"Using edge-tts voice: {voice}")
             
-            # Generate audio
-            asyncio.run(self._generate_edge_tts(text, webm_filepath, voice))
-            
-            # Convert webm to mp3
-            if os.path.exists(webm_filepath):
-                self._convert_webm_to_mp3(webm_filepath, mp3_filepath)
-                os.remove(webm_filepath)  # clean up webm
-                filepath = mp3_filepath
-            else:
-                raise Exception("edge-tts failed to create audio file")
+            # Generate audio with edge-tts
+            try:
+                asyncio.run(self._generate_edge_tts(text, webm_filepath, voice))
+                
+                # Convert webm to mp3
+                if os.path.exists(webm_filepath):
+                    self._convert_webm_to_mp3(webm_filepath, mp3_filepath)
+                    os.remove(webm_filepath)  # clean up webm
+                    filepath = mp3_filepath
+                else:
+                    raise Exception("edge-tts failed to create audio file")
+            except Exception as e:
+                logger.warning(f"edge-tts failed: {e}, falling back to gTTS")
+                # Fallback to gTTS
+                filepath = os.path.join(self.audio_dir, f"scene_{index:03d}.mp3")
+                tts = gTTS(text=text, lang='en', slow=False)
+                tts.save(filepath)
             
             if not os.path.exists(filepath):
                 raise Exception("Audio file not created after conversion")
