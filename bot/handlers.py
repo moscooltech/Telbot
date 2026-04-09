@@ -20,11 +20,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command."""
     user_name = update.effective_user.first_name
     await update.message.reply_text(
-        f"👋 Hello {user_name}! I am your AI Video Creator."
-
-"
-        "Send /generate (or /gen) followed by a story prompt to create a viral video.
-"
+        f"👋 Hello {user_name}! I am your AI Video Creator.\n\n"
+        "Send /generate (or /gen) followed by a story prompt to create a viral video.\n\n"
         "Example: `/gen A story about a lost astronaut on a neon planet.`",
         parse_mode="Markdown"
     )
