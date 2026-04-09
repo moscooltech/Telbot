@@ -10,8 +10,9 @@ def clean_narration(text):
     if not text:
         return text
     
+    print(f"CLEAN_NARRATION INPUT: '{text}'")
+    
     # Fix "e a c h" -> "each" - when single letters appear consecutively as separate words
-    # Find patterns like "e a c h" where 2+ single-letter words appear in sequence
     words = text.split()
     cleaned = []
     i = 0
@@ -27,6 +28,7 @@ def clean_narration(text):
             # If we found 2+ single letters in a row, join them
             if len(sequence) >= 2:
                 joined = ''.join(sequence)
+                print(f"JOINED sequence: '{sequence}' -> '{joined}'")
                 cleaned.append(joined)
                 i = j
                 continue
@@ -35,6 +37,7 @@ def clean_narration(text):
         i += 1
     
     text = ' '.join(cleaned)
+    print(f"CLEAN_NARRATION OUTPUT: '{text}'")
     
     # Fix missing spaces between words (e.g., "andgood" -> "and good")
     connectors = ['and', 'or', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'to', 'of', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'that', 'this', 'it', 'as', 'be', 'have', 'has', 'had', 'but', 'not', 'you', 'we', 'they', 'can', 'will', 'do', 'does', 'did']
