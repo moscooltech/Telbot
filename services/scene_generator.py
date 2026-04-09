@@ -10,21 +10,22 @@ def clean_narration(text):
     if not text:
         return text
     
-    # Aggressive fix: join any consecutive short words (1-3 chars) that likely got split
+    # Fix "e a c h" -> "each" - only join single letters (1 char) that appear consecutively
+    # This catches the main issue without incorrectly joining "us"+"in" = "usin"
     words = text.split()
     cleaned = []
     i = 0
     while i < len(words):
-        # If current word is short (likely part of a split word)
-        if len(words[i]) <= 3 and words[i].isalpha():
-            # Look ahead to find more short words to join
+        # Only check single-character words
+        if len(words[i]) == 1 and words[i].isalpha():
+            # Look ahead for more single letters
             sequence = [words[i]]
             j = i + 1
-            while j < len(words) and len(words[j]) <= 3 and words[j].isalpha():
+            while j < len(words) and len(words[j]) == 1 and words[j].isalpha():
                 sequence.append(words[j])
                 j += 1
             
-            # If we found 2+ short words in a row, join them
+            # If 2+ single letters in a row, join them
             if len(sequence) >= 2:
                 joined = ''.join(sequence)
                 cleaned.append(joined)
@@ -35,12 +36,6 @@ def clean_narration(text):
         i += 1
     
     text = ' '.join(cleaned)
-    
-    # Fix common split connectors
-    for word in ['a', 'an', 'the', 'and', 'or', 'is', 'are', 'was', 'were', 'in', 'on', 'at', 'to', 'of', 'for', 'with', 'by', 'it', 'be', 'as']:
-        text = re.sub(rf'\b{word}\s+{word}\b', f'{word} {word}', text)
-        text = re.sub(rf'\b(\w){word}\b', rf'\1{word}', text)
-        text = re.sub(rf'\b{word}(\w)\b', rf'{word}\1', text)
     
     # Fix spacing around punctuation
     text = re.sub(r'\s+', ' ', text)
