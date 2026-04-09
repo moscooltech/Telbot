@@ -10,10 +10,31 @@ def clean_narration(text):
     if not text:
         return text
     
-    # Fix "e a c h" -> "each" (single letters separated by spaces)
-    # Match any sequence of 2+ single letters separated by spaces
-    while re.search(r'\b[a-z](?:\s[a-z]){1,}\b', text, re.IGNORECASE):
-        text = re.sub(r'\b([a-z](?:\s[a-z]){1,})\b', lambda m: m.group(1).replace(' ', ''), text, flags=re.IGNORECASE)
+    # Fix "e a c h" -> "each" - when single letters appear consecutively as separate words
+    # Find patterns like "e a c h" where 2+ single-letter words appear in sequence
+    words = text.split()
+    cleaned = []
+    i = 0
+    while i < len(words):
+        # Check if we have 2+ consecutive single-letter words
+        if i + 1 < len(words) and len(words[i]) == 1 and words[i].isalpha():
+            sequence = [words[i]]
+            j = i + 1
+            while j < len(words) and len(words[j]) == 1 and words[j].isalpha():
+                sequence.append(words[j])
+                j += 1
+            
+            # If we found 2+ single letters in a row, join them
+            if len(sequence) >= 2:
+                joined = ''.join(sequence)
+                cleaned.append(joined)
+                i = j
+                continue
+        
+        cleaned.append(words[i])
+        i += 1
+    
+    text = ' '.join(cleaned)
     
     # Fix missing spaces between words (e.g., "andgood" -> "and good")
     connectors = ['and', 'or', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'to', 'of', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'that', 'this', 'it', 'as', 'be', 'have', 'has', 'had', 'but', 'not', 'you', 'we', 'they', 'can', 'will', 'do', 'does', 'did']
@@ -21,16 +42,10 @@ def clean_narration(text):
         text = re.sub(rf'{word}([a-z])', f'{word} \\1', text, flags=re.IGNORECASE)
         text = re.sub(rf'([a-z]){word}', f'\\1 {word}', text, flags=re.IGNORECASE)
     
-    # Fix missing spaces between lowercase words
-    text = re.sub(r'(?<=[a-z])(?=[a-z])([A-Z])', r' \1', text)
-    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
-    
     # Fix spacing around punctuation
     text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'\s*,\s*', ', ', text)
     text = re.sub(r'\s*\.\s*', '. ', text)
-    
-    # Ensure proper spacing after periods
     text = re.sub(r'\.([A-Z])', r'. \1', text)
     
     return text.strip()
