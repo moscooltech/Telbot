@@ -44,21 +44,23 @@ class VideoProcessor:
         # Clean text for FFmpeg drawtext filter
         clean_text = text.replace("'", "").replace(":", "").replace('"', "")
         
-        # Smart wrap: break at word boundaries, max 22 chars per line for large text
-        wrapped_lines = textwrap.wrap(clean_text, width=22, break_long_words=False, break_on_hyphens=False)
+        # Smart wrap: break at word boundaries, max 20 chars per line
+        wrapped_lines = textwrap.wrap(clean_text, width=20, break_long_words=False, break_on_hyphens=False)
         
         # Build multi-line text with newline separator
         wrapped_text = "\\n".join(wrapped_lines)
         num_lines = len(wrapped_lines)
         
-        # TikTok style: position lower third, centered
-        margin_bottom = 180
+        # TikTok style: center of screen (vertically centered)
+        # Position at 60% from top (leaves space at bottom for TikTok UI)
+        y_position = "h*0.6"
         
         # Large white text with black outline (TikTok style)
+        # Add padding by using smaller text that fits better
         drawtext_filter = (
-            f"drawtext=text='{wrapped_text}':fontcolor=white:fontsize=48:"
-            f"x=(w-text_w)/2:y=h-th-{margin_bottom}:"
-            f"borderw=4:bordercolor=black"
+            f"drawtext=text='{wrapped_text}':fontcolor=white:fontsize=44:"
+            f"x=(w-text_w)/2:y={y_position}-text_h/2:"
+            f"borderw=3:bordercolor=black"
         )
 
         cmd = (

@@ -4,6 +4,7 @@ import time
 import shutil
 import logging
 import gc
+import json
 from telegram import Update
 from telegram.ext import ContextTypes
 from services.scene_generator import SceneGenerator
@@ -61,25 +62,54 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     job_id = f"{user_id}_{int(time.time())}"
     
-    # Inform user immediately via the normal async context
-    await update.message.reply_text(
-        f"🚀 **Job Received!**\nYour video is being processed in the background.\n**ID:** `{job_id}`\n**Format:** `{video_format.capitalize()}`", 
-        parse_mode="Markdown"
-    )
+    # Generate scenes and narrations first
+    await update.message.reply_text("🧠 Generating script and scenes...")
     
-    # 2. PASS CLEAN ARGUMENTS INTO A THREAD
-    # We use threading.Thread for heavy work to avoid blocking the event loop
-    # and to bypass async-bound object issues.
-    thread = threading.Thread(
-        target=run_generation_sync,
-        args=(chat_id, prompt, job_id, video_format)
-    )
-    thread.start()
-    logger.info(f"Started background thread for job {job_id} with format {video_format}")
+    try:
+        sg = SceneGenerator()
+        scenes, narrations, metadata = sg.generate_all(prompt)
+        
+        # Build preview message with all narrations
+        preview = "📝 **Script Preview:**\n\n"
+        for i, (scene, narr) in enumerate(zip(scenes, narrations), 1):
+            preview += f"**Scene {i}:**\n{narr}\n\n"
+        
+        preview += f"**Caption:** {metadata.get('caption', '')}\n"
+        preview += f"**Hashtags:** {metadata.get('hashtags', '')}\n\n"
+        preview += "Do you want to proceed with these narrations?"
+        
+        # Send preview with confirmation buttons
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Proceed", callback_data=f"proceed_{job_id}"),
+                InlineKeyboardButton("🔄 Regenerate", callback_data=f"regen_{job_id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Store job data for callback
+        job_data = {
+            "prompt": prompt,
+            "video_format": video_format,
+            "chat_id": chat_id,
+            "scenes": scenes,
+            "narrations": narrations,
+            "metadata": metadata
+        }
+        # Save job data to temp file for callback handler
+        job_file = os.path.join(TEMP_DIR, f"job_{job_id}.json")
+        with open(job_file, "w") as f:
+            json.dump(job_data, f)
+        
+        await update.message.reply_text(preview, parse_mode="Markdown", reply_markup=reply_markup)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error generating script: {str(e)}")
 
-def run_generation_sync(chat_id, prompt, job_id, video_format):
+def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_format):
     """
-    Synchronous background function that accepts only primitive arguments.
+    Synchronous background function that uses pre-approved scenes and narrations.
     Uses TelegramAPI for manual communication.
     """
     logger.info(f"📥 Processing job {job_id} in background thread with format {video_format}...")
@@ -87,16 +117,13 @@ def run_generation_sync(chat_id, prompt, job_id, video_format):
     # 3. REFACTOR BACKGROUND FUNCTION TO USE MANUAL API
     status_data = TelegramAPI.send_message(
         chat_id=chat_id, 
-        text="🧠 **Step 1/5:** Generating story and scenes..."
+        text="🖼️ **Step 1/5:** Creating high-quality images..."
     )
     status_msg_id = status_data.get("message_id") if status_data else None
     
     try:
-        # --- PHASE 1: SCENES ---
-        sg = SceneGenerator()
-        scenes, narrations, metadata = sg.generate_all(prompt)
         if not scenes:
-            raise Exception("Failed to generate scenes.")
+            raise Exception("No scenes to process.")
         
         if status_msg_id:
             TelegramAPI.edit_message(
@@ -291,3 +318,81 @@ def run_generation_sync(chat_id, prompt, job_id, video_format):
         if os.path.exists(job_dir):
             shutil.rmtree(job_dir)
         logger.info(f"🧹 Cleaned up job: {job_id}")
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle inline button callbacks for approve/regenerate."""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    chat_id = query.message.chat_id
+    message_id = query.message.message_id
+    
+    if data.startswith("proceed_"):
+        job_id = data.replace("proceed_", "")
+        # Load job data and start processing
+        job_file = os.path.join(TEMP_DIR, f"job_{job_id}.json")
+        if os.path.exists(job_file):
+            with open(job_file, "r") as f:
+                job_data = json.load(f)
+            
+            scenes = job_data.get("scenes", [])
+            narrations = job_data.get("narrations", [])
+            metadata = job_data.get("metadata", {})
+            video_format = job_data.get("video_format", "narration")
+            
+            await query.edit_message_text("🚀 **Starting video generation...**")
+            
+            # Run in background thread
+            thread = threading.Thread(
+                target=run_generation_sync,
+                args=(chat_id, scenes, narrations, metadata, job_id, video_format)
+            )
+            thread.start()
+    elif data.startswith("regen_"):
+        job_id = data.replace("regen_", "")
+        
+        # Load job data and regenerate
+        job_file = os.path.join(TEMP_DIR, f"job_{job_id}.json")
+        if os.path.exists(job_file):
+            with open(job_file, "r") as f:
+                job_data = json.load(f)
+            
+            prompt = job_data.get("prompt", "")
+            video_format = job_data.get("video_format", "narration")
+            
+            await query.edit_message_text("🔄 Regenerating script...")
+            
+            try:
+                sg = SceneGenerator()
+                scenes, narrations, metadata = sg.generate_all(prompt)
+                
+                # Show new preview
+                preview = "📝 **Regenerated Script:**\n\n"
+                for i, (scene, narr) in enumerate(zip(scenes, narrations), 1):
+                    preview += f"**Scene {i}:**\n{narr}\n\n"
+                
+                preview += f"**Caption:** {metadata.get('caption', '')}\n"
+                preview += f"**Hashtags:** {metadata.get('hashtags', '')}\n\n"
+                preview += "Do you want to proceed with these narrations?"
+                
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Proceed", callback_data=f"proceed_{job_id}"),
+                        InlineKeyboardButton("🔄 Regenerate", callback_data=f"regen_{job_id}")
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                # Update job data with new scenes/narrations
+                job_data["scenes"] = scenes
+                job_data["narrations"] = narrations
+                job_data["metadata"] = metadata
+                with open(job_file, "w") as f:
+                    json.dump(job_data, f)
+                
+                await query.edit_message_text(preview, parse_mode="Markdown", reply_markup=reply_markup)
+                
+            except Exception as e:
+                await query.edit_message_text(f"❌ Regeneration failed: {str(e)}")

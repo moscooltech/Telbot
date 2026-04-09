@@ -3,11 +3,12 @@ import logging
 import uvicorn
 import asyncio
 import aiohttp
+import json
 from fastapi import FastAPI, Request, Response
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 from config import TELEGRAM_TOKEN
-from bot.handlers import start, generate
+from bot.handlers import start, generate, handle_callback
 
 # Configure logging
 logging.basicConfig(
@@ -28,6 +29,7 @@ bot_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 # Add handlers
 bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CommandHandler(["generate", "gen"], generate))
+bot_app.add_handler(CallbackQueryHandler(handle_callback))
 
 async def keep_alive_pinger():
     """Background task to keep Render server awake."""
