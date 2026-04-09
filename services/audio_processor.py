@@ -38,14 +38,10 @@ class AudioProcessor:
             
             # Use edge-tts with male voice (Jason is a popular male voice)
             voice = MALE_VOICES["jason"]
-            logger.info(f"Using voice: {voice}")
+            logger.info(f"Using edge-tts voice: {voice}")
             
-            try:
-                asyncio.run(self._generate_edge_tts(text, filepath, voice))
-            except Exception as e:
-                logger.warning(f"edge-tts failed: {e}, falling back to gTTS")
-                tts = gTTS(text=text, lang='en', slow=False)
-                tts.save(filepath)
+            # Use edge-tts only (no fallback to gTTS)
+            asyncio.run(self._generate_edge_tts(text, filepath, voice))
             
             # Get duration using ffprobe
             cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{filepath}\""

@@ -45,24 +45,21 @@ class VideoProcessor:
         # Clean text for FFmpeg drawtext filter
         clean_text = text.replace("'", "").replace(":", "").replace('"', "")
         
-        # Auto-wrap: 25 chars per line - adapts to content length
-        wrapped_lines = textwrap.wrap(clean_text, width=25)
+        # Auto-wrap: 15 chars per line for proper line breaks
+        wrapped_lines = textwrap.wrap(clean_text, width=15)
         
-        # Build multi-line text with proper line height
+        # Build multi-line text with newline separator
         wrapped_text = "\\n".join(wrapped_lines)
         num_lines = len(wrapped_lines)
         
-        # Calculate vertical position - center the block based on number of lines
-        # Each line ~50px with fontsize 48, position above bottom
-        line_height = 55
-        base_y = 200 + (num_lines - 1) * line_height // 2
+        # Position: 120px from bottom, centered horizontally
+        margin_bottom = 120
         
-        # Professional subtitles: larger font, white with black outline (stroke)
-        # y=center - centers vertically, x=center - centers horizontally
+        # Subtitles: white with black outline, no external font file needed
         drawtext_filter = (
-            f"drawtext=text='{wrapped_text}':fontcolor=white:fontsize=48:fontfile=bold:"
-            f"x=(w-text_w)/2:y=h-th-{base_y}:"
-            f"borderw=3:bordercolor=black"
+            f"drawtext=text='{wrapped_text}':fontcolor=white:fontsize=35:"
+            f"x=(w-text_w)/2:y=h-th-{margin_bottom}:"
+            f"borderw=2:bordercolor=black"
         )
 
         cmd = (
@@ -73,7 +70,7 @@ class VideoProcessor:
             f"-threads 1 \"{output_path}\""
         )
         
-        logger.info(f"Rendering sub-clip {index} with text...")
+        logger.info(f"Rendering sub-clip {index} with text: {clean_text[:30]}...")
         subprocess.run(cmd, shell=True, check=True, capture_output=True)
         return output_path
 
