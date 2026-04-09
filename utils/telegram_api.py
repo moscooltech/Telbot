@@ -1,3 +1,4 @@
+import os
 import requests
 import logging
 from config import TELEGRAM_TOKEN
@@ -46,6 +47,13 @@ class TelegramAPI:
     def send_video(cls, chat_id, video_path, caption="", parse_mode="Markdown"):
         url = f"{cls.BASE_URL}/sendVideo"
         try:
+            if not os.path.exists(video_path):
+                logger.error(f"Video file does not exist: {video_path}")
+                return None
+            
+            file_size = os.path.getsize(video_path)
+            logger.info(f"Uploading video: {video_path} ({file_size} bytes)")
+            
             with open(video_path, "rb") as video_file:
                 files = {"video": video_file}
                 data = {
@@ -54,8 +62,9 @@ class TelegramAPI:
                     "parse_mode": parse_mode,
                     "supports_streaming": True
                 }
-                response = requests.post(url, data=data, files=files, timeout=120)
+                response = requests.post(url, data=data, files=files, timeout=300)
                 response.raise_for_status()
+                logger.info("Video uploaded successfully")
                 return response.json()
         except Exception as e:
             logger.error(f"Error sending manual video: {e}")
