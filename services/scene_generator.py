@@ -10,25 +10,23 @@ def clean_narration(text):
     if not text:
         return text
     
-    print(f"CLEAN_NARRATION INPUT: '{text}'")
-    
-    # Fix "e a c h" -> "each" - when single letters appear consecutively as separate words
+    # Aggressive fix: join any consecutive short words (1-3 chars) that likely got split
     words = text.split()
     cleaned = []
     i = 0
     while i < len(words):
-        # Check if we have 2+ consecutive single-letter words
-        if i + 1 < len(words) and len(words[i]) == 1 and words[i].isalpha():
+        # If current word is short (likely part of a split word)
+        if len(words[i]) <= 3 and words[i].isalpha():
+            # Look ahead to find more short words to join
             sequence = [words[i]]
             j = i + 1
-            while j < len(words) and len(words[j]) == 1 and words[j].isalpha():
+            while j < len(words) and len(words[j]) <= 3 and words[j].isalpha():
                 sequence.append(words[j])
                 j += 1
             
-            # If we found 2+ single letters in a row, join them
+            # If we found 2+ short words in a row, join them
             if len(sequence) >= 2:
                 joined = ''.join(sequence)
-                print(f"JOINED sequence: '{sequence}' -> '{joined}'")
                 cleaned.append(joined)
                 i = j
                 continue
@@ -37,7 +35,20 @@ def clean_narration(text):
         i += 1
     
     text = ' '.join(cleaned)
-    print(f"CLEAN_NARRATION OUTPUT: '{text}'")
+    
+    # Fix common split connectors
+    for word in ['a', 'an', 'the', 'and', 'or', 'is', 'are', 'was', 'were', 'in', 'on', 'at', 'to', 'of', 'for', 'with', 'by', 'it', 'be', 'as']:
+        text = re.sub(rf'\b{word}\s+{word}\b', f'{word} {word}', text)
+        text = re.sub(rf'\b(\w){word}\b', rf'\1{word}', text)
+        text = re.sub(rf'\b{word}(\w)\b', rf'{word}\1', text)
+    
+    # Fix spacing around punctuation
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'\s*,\s*', ', ', text)
+    text = re.sub(r'\s*\.\s*', '. ', text)
+    text = re.sub(r'\.([A-Z])', r'. \1', text)
+    
+    return text.strip()
     
     # Fix missing spaces between words (e.g., "andgood" -> "and good")
     connectors = ['and', 'or', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'to', 'of', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'that', 'this', 'it', 'as', 'be', 'have', 'has', 'had', 'but', 'not', 'you', 'we', 'they', 'can', 'will', 'do', 'does', 'did']
@@ -96,6 +107,9 @@ Output JSON ONLY:
                     timeout=60
                 )
                 
+                # Debug: print raw LLM response
+                print(f"=== RAW LLM RESPONSE ===\n{content[:500]}...\n=== END ===")
+                
                 # Hyper-robust JSON extraction
                 try:
                     start_idx = content.find('{')
@@ -113,15 +127,17 @@ Output JSON ONLY:
                 if len(raw_scenes) < MIN_SCENES:
                     raise Exception("AI script too short")
 
-                # Debug: print raw narrations before cleaning
-                print(f"DEBUG raw narrations: {raw_scenes[0].get('narration', '')}")
+                # Debug: print raw narration before cleaning
+                if raw_scenes:
+                    raw_narr = raw_scenes[0].get("narration", "")
+                    print(f"=== RAW NARRATION (before clean): '{raw_narr}' ===")
 
                 # Map the new keys: narration and description
                 visuals = [s.get("description", s.get("visual_prompt", "")) for s in raw_scenes]
                 narrations = [clean_narration(s.get("narration", s.get("spoken_script", ""))) for s in raw_scenes]
 
                 # Debug: print cleaned narrations
-                print(f"DEBUG cleaned narrations: {narrations[0]}")
+                print(f"=== CLEANED NARRATION: '{narrations[0]}' ===")
                 
                 # LAZY RESPONSE CHECK: If narration is just the prompt repeated, fail and retry
                 if any(prompt.strip().lower() in n.strip().lower() and len(n) < len(prompt) + 10 for n in narrations):
