@@ -63,10 +63,7 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Inform user immediately via the normal async context
     await update.message.reply_text(
-        f"🚀 **Job Received!**
-Your video is being processed in the background.
-**ID:** `{job_id}`
-**Format:** `{video_format.capitalize()}`", 
+        f"🚀 **Job Received!**\nYour video is being processed in the background.\n**ID:** `{job_id}`\n**Format:** `{video_format.capitalize()}`", 
         parse_mode="Markdown"
     )
     
@@ -105,8 +102,7 @@ def run_generation_sync(chat_id, prompt, job_id, video_format):
             TelegramAPI.edit_message(
                 chat_id=chat_id,
                 message_id=status_msg_id,
-                text=f"🖼️ **Step 2/5:** Generated {len(scenes)} scenes.
-Creating high-quality images..."
+                text=f"🖼️ **Step 2/5:** Generated {len(scenes)} scenes.\nCreating high-quality images..."
             )
         
         # --- PHASE 2: IMAGES ---
@@ -213,9 +209,7 @@ Creating high-quality images..."
                 TelegramAPI.edit_message(
                     chat_id=chat_id,
                     message_id=status_msg_id,
-                    text=f"❌ **Step 3 Failed:** Audio processing error
-
-`{str(e)[:100]}`"
+                    text=f"❌ **Step 3 Failed:** Audio processing error\n\n`{str(e)[:100]}`"
                 )
             raise Exception(f"Step 3 (Audio Merge) failed: {e}")
         
@@ -277,9 +271,7 @@ Creating high-quality images..."
         result = TelegramAPI.send_video(
             chat_id=chat_id,
             video_path=final_video,
-            caption=f"{caption}
-
-{hashtags}"
+            caption=f"{caption}\n\n{hashtags}"
         )
         
         if result and status_msg_id:
@@ -291,8 +283,7 @@ Creating high-quality images..."
         logger.error(f"❌ Job {job_id} failed: {e}", exc_info=True)
         TelegramAPI.send_message(
             chat_id=chat_id,
-            text=f"❌ **Generation failed:** {str(e)}
-Please try again."
+            text=f"❌ **Generation failed:** {str(e)}\nPlease try again."
         )
     finally:
         # Clean up temp files
