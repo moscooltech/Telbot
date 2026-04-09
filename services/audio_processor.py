@@ -39,27 +39,49 @@ class AudioProcessor:
 
     def merge_audio(self, narration_paths, bg_music_path=None):
         """
-        Merges narration files using FFmpeg (ultra-fast & low RAM).
+        Merges narration files and optionally background music.
+        Handles cases where narration_paths is empty.
         """
         logger.info(f"🎙️ Merging audio for job {self.job_id}...")
         
-        if not narration_paths:
-            return None
-
         final_audio_path = os.path.join(self.audio_dir, "final_audio.mp3")
 
         try:
-            # Create a list file for ffmpeg concat
+            if not narration_paths and not bg_music_path:
+                logger.info("No narration or background music to merge.")
+                return None
+            
+            if not narration_paths and bg_music_path:
+                logger.info("Only background music available. Copying background music.")
+                shutil.copy(bg_music_path, final_audio_path)
+                return final_audio_path
+
+            # If narration_paths exist, proceed with concat
             list_file_path = os.path.join(self.audio_dir, "concat_list.txt")
             with open(list_file_path, "w") as f:
                 for path in narration_paths:
                     abs_path = os.path.abspath(path)
-                    logger.info(f"🎵 Adding to merge: {abs_path}")
+                    logger.info(f"🎵 Adding narration to merge: {abs_path}")
                     f.write(f"file '{abs_path}'\n")
             
-            # Run ffmpeg concat
-            cmd = f"ffmpeg -y -f concat -safe 0 -i \"{list_file_path}\" -c copy \"{final_audio_path}\""
-            subprocess.run(cmd, shell=True, check=True, capture_output=True)
+            # Merge narrations first
+            narration_merged_path = os.path.join(self.audio_dir, "narrations_merged.mp3")
+            cmd_narration_merge = f"ffmpeg -y -f concat -safe 0 -i \"{list_file_path}\" -c copy \"{narration_merged_path}\""
+            subprocess.run(cmd_narration_merge, shell=True, check=True, capture_output=True)
+
+            if bg_music_path:
+                logger.info("Mixing narrations with background music.")
+                # Use a more sophisticated mix if both exist
+                cmd_final_mix = (
+                    f"ffmpeg -y -i \"{narration_merged_path}\" -i \"{bg_music_path}\" "
+                    f"-filter_complex \"[0:a]volume=1.0[a0];[1:a]volume=0.3[a1];[a0][a1]amix=inputs=2:duration=first\" "
+                    f"-c:a aac -b:a 128k -shortest \"{final_audio_path}\""
+                )
+                subprocess.run(cmd_final_mix, shell=True, check=True, capture_output=True)
+            else:
+                logger.info("No background music. Using merged narrations as final audio.")
+                shutil.copy(narration_merged_path, final_audio_path)
+                
             return final_audio_path
         except Exception as e:
             logger.error(f"❌ Audio merge failed: {e}")

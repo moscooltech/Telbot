@@ -13,34 +13,25 @@ class SceneGenerator:
         AI Production Agent: Writes a full professional script and plans explainer visuals.
         """
         system_prompt = f"""
-You are a Professional AI Video Producer and Lead Educator.
-Your task: Convert the user's prompt into a high-quality educational/viral video script.
+You are a Professional AI Video Producer. Your task: Convert the user's prompt into a high-quality educational/viral video script.
 
 Requirements:
-- Write a UNIQUE narration script for EACH of the {MIN_SCENES} to {MAX_SCENES} scenes
-- Each narration must be DIFFERENT from the others - never repeat the same phrasing
-- NEVER include "scene 1", "scene 2", "step 1", "step 2" or any scene/step numbers in the narration text
-- The narration should be pure content/educational text only - no scene references
-- Scene 1: Introduce the topic with a hook
-- Scene 2-7: Expand with different explanations and examples  
-- Scene 8: Conclude with a call to action
-- Each spoken_script should be 20-30 words, written as natural spoken text
+- Write a UNIQUE narration for EACH of the {MIN_SCENES} to {MAX_SCENES} scenes.
+- Each scene must follow a strict "Narration" and "Description" format.
+- "narration": What is spoken. Must be 20-30 words of natural, engaging text.
+- "description": What is shown visually. Detailed scene description for an image generator.
+- NEVER include "scene 1", "scene 2", "step 1", or any numbering in the narration.
+- Scene 1: Strong hook.
+- Scene 2-7: Educational/story content.
+- Scene 8: Call to action.
 
-For visuals, use:
-- "visual_prompt": Describe what appears on screen (infographics, diagrams, text overlays)
-
-Output format: JSON ONLY with unique narrations for each scene.
+Output JSON ONLY:
 {{
   "scenes": [
     {{
-      "spoken_script": "Pure narration content - NO scene/step numbers",
-      "visual_prompt": "Visual description for scene 1"
-    }},
-    {{
-      "spoken_script": "Different narration content - NO scene/step numbers",
-      "visual_prompt": "Visual description for scene 2"
-    }},
-    ...
+      "narration": "...",
+      "description": "..."
+    }}
   ],
   "caption": "Viral hook",
   "hashtags": ["tag1", "tag2"]
@@ -70,8 +61,9 @@ Output format: JSON ONLY with unique narrations for each scene.
                 if len(raw_scenes) < MIN_SCENES:
                     raise Exception("AI script too short")
 
-                visuals = [s.get("visual_prompt", "") for s in raw_scenes]
-                narrations = [s.get("spoken_script", "") for s in raw_scenes]
+                # Map the new keys: narration and description
+                visuals = [s.get("description", s.get("visual_prompt", "")) for s in raw_scenes]
+                narrations = [s.get("narration", s.get("spoken_script", "")) for s in raw_scenes]
                 
                 # LAZY RESPONSE CHECK: If narration is just the prompt repeated, fail and retry
                 if any(prompt.strip().lower() in n.strip().lower() and len(n) < len(prompt) + 10 for n in narrations):

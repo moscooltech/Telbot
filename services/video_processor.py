@@ -2,7 +2,8 @@ import os
 import subprocess
 import logging
 import random
-from config import TEMP_DIR, IMAGE_WIDTH, IMAGE_HEIGHT, FFMPEG_PRESET, FFMPEG_CRF, FFMPEG_THREADS
+import textwrap
+from config import TEMP_DIR, IMAGE_WIDTH, IMAGE_HEIGHT, FFMPEG_PRESET, FFMPEG_CRF, FFMPEG_THREADS, VIDEO_DURATION_PER_SCENE
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class VideoProcessor:
         Creates a short video clip with SUBTITLES BURNED IN.
         Burning at the clip level prevents OOM crashes during final assembly.
         """
+        import textwrap
         output_path = os.path.join(self.video_dir, f"clip_{index:03d}.mp4")
         
         # Clean text for FFmpeg drawtext filter

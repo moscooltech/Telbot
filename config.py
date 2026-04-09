@@ -36,7 +36,7 @@ BYTEZ_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 
 # Video Settings - AGENTIC PLANNING
 MIN_SCENES = 8                      # Minimum scenes for 40s+
-MAX_SCENES = 15                     # Maximum scenes for RAM safety
+MAX_SCENES = 20                     # Maximum scenes for RAM safety
 VIDEO_DURATION_PER_SCENE = 6        # Targeted seconds per scene
 ASPECT_RATIO = "9:16"               # TikTok format
 
