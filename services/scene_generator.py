@@ -11,13 +11,9 @@ def clean_narration(text):
         return text
     
     # Fix "e a c h" -> "each" (single letters separated by spaces)
-    # This handles the specific case where LLM outputs letter-by-letter with spaces
-    def fix_spaced_letters(match):
-        letters = match.group(1).replace(' ', '')
-        return letters
-    
-    # Match sequences of single letters separated by spaces (2+ letters)
-    text = re.sub(r'\b([a-z](?:\s[a-z]){2,})\b', fix_spaced_letters, text, flags=re.IGNORECASE)
+    # Match any sequence of 2+ single letters separated by spaces
+    while re.search(r'\b[a-z](?:\s[a-z]){1,}\b', text, re.IGNORECASE):
+        text = re.sub(r'\b([a-z](?:\s[a-z]){1,})\b', lambda m: m.group(1).replace(' ', ''), text, flags=re.IGNORECASE)
     
     # Fix missing spaces between words (e.g., "andgood" -> "and good")
     connectors = ['and', 'or', 'the', 'a', 'an', 'is', 'are', 'was', 'were', 'to', 'of', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'that', 'this', 'it', 'as', 'be', 'have', 'has', 'had', 'but', 'not', 'you', 'we', 'they', 'can', 'will', 'do', 'does', 'did']
