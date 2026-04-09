@@ -97,8 +97,10 @@ Output JSON ONLY:
                 try:
                     start_idx = content.find('{')
                     end_idx = content.rfind('}') + 1
-                    data = json.loads(content[start_idx:end_idx])
-                except:
+                    json_str = content[start_idx:end_idx]
+                    data = json.loads(json_str)
+                except Exception as e:
+                    print(f"JSON extraction failed: {e}")
                     if "```json" in content:
                         data = json.loads(content.split("```json")[1].split("```")[0])
                     else:
@@ -108,9 +110,15 @@ Output JSON ONLY:
                 if len(raw_scenes) < MIN_SCENES:
                     raise Exception("AI script too short")
 
+                # Debug: print raw narrations before cleaning
+                print(f"DEBUG raw narrations: {raw_scenes[0].get('narration', '')}")
+
                 # Map the new keys: narration and description
                 visuals = [s.get("description", s.get("visual_prompt", "")) for s in raw_scenes]
                 narrations = [clean_narration(s.get("narration", s.get("spoken_script", ""))) for s in raw_scenes]
+
+                # Debug: print cleaned narrations
+                print(f"DEBUG cleaned narrations: {narrations[0]}")
                 
                 # LAZY RESPONSE CHECK: If narration is just the prompt repeated, fail and retry
                 if any(prompt.strip().lower() in n.strip().lower() and len(n) < len(prompt) + 10 for n in narrations):
