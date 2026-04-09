@@ -2,6 +2,7 @@ import os
 import logging
 import subprocess
 import time
+import shutil
 from gtts import gTTS
 from config import TEMP_DIR, AUDIO_SAMPLE_RATE, SKIP_BACKGROUND_MUSIC
 
@@ -43,6 +44,8 @@ class AudioProcessor:
         Handles cases where narration_paths is empty.
         """
         logger.info(f"🎙️ Merging audio for job {self.job_id}...")
+        logger.info(f" narration_paths: {narration_paths}")
+        logger.info(f" bg_music_path: {bg_music_path}")
         
         final_audio_path = os.path.join(self.audio_dir, "final_audio.mp3")
 
@@ -67,7 +70,15 @@ class AudioProcessor:
             # Merge narrations first
             narration_merged_path = os.path.join(self.audio_dir, "narrations_merged.mp3")
             cmd_narration_merge = f"ffmpeg -y -f concat -safe 0 -i \"{list_file_path}\" -c copy \"{narration_merged_path}\""
-            subprocess.run(cmd_narration_merge, shell=True, check=True, capture_output=True)
+            logger.info(f"Running: {cmd_narration_merge}")
+            result = subprocess.run(cmd_narration_merge, shell=True, capture_output=True)
+            if result.returncode != 0:
+                logger.error(f"ffmpeg narration merge failed: {result.stderr.decode()}")
+                return None
+            
+            if not os.path.exists(narration_merged_path):
+                logger.error(f"Narration merge output not created: {narration_merged_path}")
+                return None
 
             if bg_music_path:
                 logger.info("Mixing narrations with background music.")
@@ -77,10 +88,18 @@ class AudioProcessor:
                     f"-filter_complex \"[0:a]volume=1.0[a0];[1:a]volume=0.3[a1];[a0][a1]amix=inputs=2:duration=first\" "
                     f"-c:a aac -b:a 128k -shortest \"{final_audio_path}\""
                 )
-                subprocess.run(cmd_final_mix, shell=True, check=True, capture_output=True)
+                logger.info(f"Running: {cmd_final_mix}")
+                result = subprocess.run(cmd_final_mix, shell=True, capture_output=True)
+                if result.returncode != 0:
+                    logger.error(f"ffmpeg mix failed: {result.stderr.decode()}")
+                    return None
             else:
                 logger.info("No background music. Using merged narrations as final audio.")
                 shutil.copy(narration_merged_path, final_audio_path)
+                
+            if not os.path.exists(final_audio_path):
+                logger.error(f"Final audio not created: {final_audio_path}")
+                return None
                 
             return final_audio_path
         except Exception as e:
