@@ -52,8 +52,6 @@ Requirements:
 - "narration": What is spoken. Must be 20-30 words of natural, engaging text with proper grammar and punctuation.
 - "description": What is shown visually. Detailed scene description for an image generator.
 - NEVER include "scene 1", "scene 2", "step 1", or any numbering in the narration.
-- ALWAYS use proper spacing between words. Never concatenate words together (e.g., "andgood" is WRONG, "and good" is CORRECT).
-- NEVER add spaces between letters in words (e.g., "e a c h" is WRONG, "each" is CORRECT).
 - Use proper punctuation: periods, commas, and capital letters after periods.
 - Scene 1: Strong hook.
 - Scene 2-7: Educational/story content.
