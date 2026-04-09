@@ -45,16 +45,24 @@ class VideoProcessor:
         # Clean text for FFmpeg drawtext filter
         clean_text = text.replace("'", "").replace(":", "").replace('"', "")
         
-        # Professional word-wrap: 30 chars per line fits 720p width nicely at fontsize 36
-        wrapped_lines = textwrap.wrap(clean_text, width=30)
-        wrapped_text = "\\\n".join(wrapped_lines)
-
-        # Optimization: Use drawtext instead of subtitles filter (faster, lower RAM)
-        # y=h-th-150 dynamically places the block 150px from bottom regardless of line count
+        # Auto-wrap: 25 chars per line - adapts to content length
+        wrapped_lines = textwrap.wrap(clean_text, width=25)
+        
+        # Build multi-line text with proper line height
+        wrapped_text = "\\n".join(wrapped_lines)
+        num_lines = len(wrapped_lines)
+        
+        # Calculate vertical position - center the block based on number of lines
+        # Each line ~50px with fontsize 48, position above bottom
+        line_height = 55
+        base_y = 200 + (num_lines - 1) * line_height // 2
+        
+        # Professional subtitles: larger font, white with black outline (stroke)
+        # y=center - centers vertically, x=center - centers horizontally
         drawtext_filter = (
-            f"drawtext=text='{wrapped_text}':fontcolor=yellow:fontsize=36:fontfile=bold:"
-            f"x=(w-text_w)/2:y=h-th-150:box=1:boxcolor=black@0.5:boxborderw=10:"
-            f"shadowcolor=black@0.4:shadowx=2:shadowy=2"
+            f"drawtext=text='{wrapped_text}':fontcolor=white:fontsize=48:fontfile=bold:"
+            f"x=(w-text_w)/2:y=h-th-{base_y}:"
+            f"borderw=3:bordercolor=black"
         )
 
         cmd = (

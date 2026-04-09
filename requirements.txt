@@ -3,6 +3,7 @@ requests
 ffmpeg-python
 Pillow
 gTTS
+edge-tts
 python-dotenv
 aiohttp
 fastapi

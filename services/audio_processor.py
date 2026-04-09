@@ -3,10 +3,19 @@ import logging
 import subprocess
 import time
 import shutil
+import asyncio
+import edge_tts
 from gtts import gTTS
 from config import TEMP_DIR, AUDIO_SAMPLE_RATE, SKIP_BACKGROUND_MUSIC
 
 logger = logging.getLogger(__name__)
+
+# Male voices available in edge-tts
+MALE_VOICES = {
+    "jason": "en-US-JasonNeural",
+    "guy": "en-US-GuyNeural",
+    "ryan": "en-GB-RyanNeural"
+}
 
 class AudioProcessor:
     def __init__(self, job_id):
@@ -16,14 +25,27 @@ class AudioProcessor:
         self.audio_dir = os.path.join(self.job_dir, "audio")
         os.makedirs(self.audio_dir, exist_ok=True)
 
+    async def _generate_edge_tts(self, text, filepath, voice="en-US-JasonNeural"):
+        """Generate audio using edge-tts."""
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(filepath)
+
     def generate_single_narration(self, text, index):
         """Generates a single narration file and returns (path, duration)."""
         try:
             logger.info(f"🎙️ Generating audio for index {index}: '{text[:50]}...'")
             filepath = os.path.join(self.audio_dir, f"scene_{index:03d}.mp3")
-            # Generate TTS
-            tts = gTTS(text=text, lang='en', slow=False)
-            tts.save(filepath)
+            
+            # Use edge-tts with male voice (Jason is a popular male voice)
+            voice = MALE_VOICES["jason"]
+            logger.info(f"Using voice: {voice}")
+            
+            try:
+                asyncio.run(self._generate_edge_tts(text, filepath, voice))
+            except Exception as e:
+                logger.warning(f"edge-tts failed: {e}, falling back to gTTS")
+                tts = gTTS(text=text, lang='en', slow=False)
+                tts.save(filepath)
             
             # Get duration using ffprobe
             cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{filepath}\""
