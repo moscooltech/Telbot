@@ -30,18 +30,44 @@ class AudioProcessor:
         communicate = edge_tts.Communicate(text, voice)
         await communicate.save(filepath)
 
+    def _convert_webm_to_mp3(self, webm_path, mp3_path):
+        """Convert webm to mp3 using ffmpeg."""
+        cmd = f"ffmpeg -y -i \"{webm_path}\" -vn -acodec libmp3lame \"{mp3_path}\""
+        result = subprocess.run(cmd, shell=True, capture_output=True)
+        if result.returncode != 0:
+            logger.error(f"ffmpeg conversion failed: {result.stderr.decode()}")
+            # Fallback: just rename (works if webm is already mp3-compatible)
+            if not os.path.exists(mp3_path):
+                import shutil
+                shutil.copy(webm_path, mp3_path)
+        return os.path.exists(mp3_path)
+
     def generate_single_narration(self, text, index):
         """Generates a single narration file and returns (path, duration)."""
         try:
             logger.info(f"🎙️ Generating audio for index {index}: '{text[:50]}...'")
-            filepath = os.path.join(self.audio_dir, f"scene_{index:03d}.mp3")
+            
+            # edge-tts outputs webm format, save as .webm first then convert
+            webm_filepath = os.path.join(self.audio_dir, f"scene_{index:03d}.webm")
+            mp3_filepath = os.path.join(self.audio_dir, f"scene_{index:03d}.mp3")
             
             # Use edge-tts with male voice (Jason is a popular male voice)
             voice = MALE_VOICES["jason"]
             logger.info(f"Using edge-tts voice: {voice}")
             
-            # Use edge-tts only (no fallback to gTTS)
-            asyncio.run(self._generate_edge_tts(text, filepath, voice))
+            # Generate audio
+            asyncio.run(self._generate_edge_tts(text, webm_filepath, voice))
+            
+            # Convert webm to mp3
+            if os.path.exists(webm_filepath):
+                self._convert_webm_to_mp3(webm_filepath, mp3_filepath)
+                os.remove(webm_filepath)  # clean up webm
+                filepath = mp3_filepath
+            else:
+                raise Exception("edge-tts failed to create audio file")
+            
+            if not os.path.exists(filepath):
+                raise Exception("Audio file not created after conversion")
             
             # Get duration using ffprobe
             cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{filepath}\""
