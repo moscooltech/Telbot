@@ -105,19 +105,19 @@ class VideoProcessor:
             
             scale_filter = f"scale={self.width}:{self.height}:force_original_aspect_ratio=increase,crop={self.width}:{self.height}"
             
-            cmd = (
-                f"ffmpeg -y -loop 1 -i \"{image_path}\" "
-                f"-t {use_duration} -r 15 -c:v libx264 -preset ultrafast -crf 26 "
-                f"-vf \"{scale_filter},{drawtext_filters},format=yuv420p\" "
-                f"-threads 1 \"{output_path}\""
-            )
+            cmd = [
+                "ffmpeg", "-y", "-loop", "1", "-i", image_path,
+                "-t", str(use_duration), "-r", "15",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+                "-vf", f"{scale_filter},{drawtext_filters},format=yuv420p",
+                "-threads", "1", output_path
+            ]
             
-            logger.info(f"Rendering scene {index}: {original_word_count} words, cmd: {cmd[:200]}...")
+            logger.info(f"Rendering scene {index}: {original_word_count} words")
             
-            # Increase timeout for animated subtitles - need more time for multiple drawtext filters
             timeout = 120 if original_word_count > 5 else 90
             try:
-                result = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout)
+                result = subprocess.run(cmd, capture_output=True, timeout=timeout)
             except subprocess.TimeoutExpired:
                 raise Exception(f"FFmpeg timeout after {timeout}s")
             
@@ -135,26 +135,31 @@ class VideoProcessor:
         output_path = os.path.join(self.video_dir, f"clip_{index:03d}.mp4")
         
         wrapped = textwrap.wrap(text, width=20, break_long_words=False)
-        wrapped_text = "\\n".join(wrapped).replace("'", "\\'")
+        wrapped_text = "\\n".join(wrapped)
         
+        double_quote_escaped = wrapped_text.replace('"', '\\"')
         drawtext = (
-            f"drawtext=text='{wrapped_text}':fontcolor=white:fontsize=42:"
+            f"drawtext=text=\"{double_quote_escaped}\":fontcolor=white:fontsize=42:"
             f"x=(w-text_w)/2:y=h*0.65-text_h/2:"
             f"borderw=2:bordercolor=black:"
             f"box=1:boxcolor=black@0.35:boxborderw=12"
         )
         
-        cmd = (
-            f"ffmpeg -y -loop 1 -i \"{image_path}\" "
-            f"-t {duration} -r 15 -c:v libx264 -preset ultrafast -crf 26 "
-            f"-vf \"scale={self.width}:{self.height}:force_original_aspect_ratio=increase,crop={self.width}:{self.height},{drawtext},format=yuv420p\" "
-            f"-threads 1 \"{output_path}\""
-        )
+        scale_filter = f"scale={self.width}:{self.height}:force_original_aspect_ratio=increase,crop={self.width}:{self.height}"
+        
+        cmd = [
+            "ffmpeg", "-y", "-loop", "1", "-i", image_path,
+            "-t", str(duration), "-r", "15",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+            "-vf", f"{scale_filter},{drawtext},format=yuv420p",
+            "-threads", "1", output_path
+        ]
         
         logger.info(f"Rendering simple static subtitle for scene {index}")
-        result = subprocess.run(cmd, shell=True, capture_output=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, timeout=60)
         if result.returncode != 0:
-            raise Exception(f"Simple subtitle FFmpeg failed: {result.stderr.decode()[:300] if result.stderr else 'unknown'}")
+            err = result.stderr.decode() if result.stderr else 'unknown'
+            raise Exception(f"Simple subtitle FFmpeg failed: {err[:300]}")
         return output_path
 
     def _calculate_word_timing(self, words, duration):
@@ -238,13 +243,13 @@ class VideoProcessor:
             is_keyword = idx in keyword_indices
             fontcolor = "#00FFFF" if is_keyword else "white"
             
-            escaped_word = word.replace("'", "\\'")
+            double_escaped = word.replace('"', '\\"')
             
             start_str = f"{start:.2f}"
             end_str = f"{end:.2f}"
             
             dt = (
-                f"drawtext=text='{escaped_word}':fontcolor={fontcolor}:fontsize={font_size}:"
+                f"drawtext=text=\"{double_escaped}\":fontcolor={fontcolor}:fontsize={font_size}:"
                 f"x=(w-text_w)/2:y=h*0.65-text_h/2:"
                 f"borderw=2:bordercolor=black:"
                 f"box=1:boxcolor={box_color}:boxborderw={box_padding}:"
@@ -252,10 +257,10 @@ class VideoProcessor:
             )
             word_filters.append(dt)
         
-        escaped_full = full_text.replace("'", "\\'")
+        double_escaped_full = full_text.replace('"', '\\"')
         
         show_full = (
-            f"drawtext=text='{escaped_full}':fontcolor=white:fontsize={font_size}:"
+            f"drawtext=text=\"{double_escaped_full}\":fontcolor=white:fontsize={font_size}:"
             f"x=(w-text_w)/2:y=h*0.65-text_h/2:"
             f"borderw=2:bordercolor=black:"
             f"box=1:boxcolor={box_color}:boxborderw={box_padding}:"
@@ -282,16 +287,19 @@ class VideoProcessor:
             final_output = os.path.join(self.job_dir, "final_output.mp4")
             
             if audio_path and os.path.exists(audio_path):
-                cmd = (
-                    f"ffmpeg -y -f concat -safe 0 -i \"{list_file}\" -i \"{audio_path}\" "
-                    f"-c:v copy -c:a aac -b:a 128k -shortest -threads 1 \"{final_output}\""
-                )
+                cmd = [
+                    "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file,
+                    "-i", audio_path,
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                    "-shortest", "-threads", "1", final_output
+                ]
             else:
-                cmd = (
-                    f"ffmpeg -y -f concat -safe 0 -i \"{list_file}\" -c copy \"{final_output}\""
-                )
+                cmd = [
+                    "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file,
+                    "-c", "copy", "-threads", "1", final_output
+                ]
 
-            subprocess.run(cmd, shell=True, check=True, capture_output=True)
+            subprocess.run(cmd, check=True, capture_output=True)
             return final_output
 
         except Exception as e:
