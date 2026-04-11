@@ -271,10 +271,12 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
         num_clips = len(image_paths)
         for i, (img_path, dur, scene_text) in enumerate(zip(image_paths, durations, text_for_video_overlay)):
             if status_msg_id:
+                # Show more detail: scene number and preview of text
+                text_preview = scene_text[:50] + "..." if scene_text and len(scene_text) > 50 else scene_text
                 TelegramAPI.edit_message(
                     chat_id=chat_id, 
                     message_id=status_msg_id,
-                    text=f"🎬 **Step 4/5:** Processing video clips... ({i+1}/{num_clips})"
+                    text=f"🎬 **Step 4/5:** Rendering scene {i+1}/{num_clips}\n📝 \"{text_preview}\""
                 )
             clip = vp.create_scene_video(img_path, dur, i, scene_text, dur)  # Pass duration for sync
             clip_paths.append(clip)

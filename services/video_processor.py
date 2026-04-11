@@ -76,13 +76,7 @@ class VideoProcessor:
     def create_scene_video(self, image_path, duration, index, narration, narration_duration=None):
         """
         Creates a short video clip with TikTok-style WORD-BY-WORD ANIMATED SUBTITLES.
-        
-        Features:
-        - Word-by-word display synchronized with narration
-        - Keyword highlighting (cyan color)
-        - TikTok-safe positioning (avoids UI elements at bottom)
-        - Semi-transparent background box
-        - Perfect sync with audio duration
+        Falls back to simple static subtitles on error.
         """
         output_path = os.path.join(self.video_dir, f"clip_{index:03d}.mp4")
         
@@ -94,30 +88,73 @@ class VideoProcessor:
         tokens = self._split_words_and_punct(clean_text)
         words = [t[0] for t in tokens]
         original_word_count = len([w for w in words if w])
-        logger.info(f"Processing scene {index} with {original_word_count} words, duration: {duration}s")
+        
+        logger.info(f"Scene {index}: {original_word_count} words, {duration}s duration")
+        logger.info(f"Text: {clean_text[:80]}")
         
         use_duration = duration if narration_duration is None else narration_duration
-        word_times = self._calculate_word_timing(words, use_duration)
         
-        wrapped_lines = self._wrap_subtitle(clean_text)
-        wrapped_text = " ".join(wrapped_lines)
-        line_count = len(wrapped_lines)
+        try:
+            word_times = self._calculate_word_timing(words, use_duration)
+            wrapped_lines = self._wrap_subtitle(clean_text)
+            line_count = len(wrapped_lines)
+            
+            drawtext_filters = self._build_word_animated_filter(
+                words, word_times, wrapped_lines, use_duration, line_count
+            )
+            
+            scale_filter = f"scale={self.width}:{self.height}:force_original_aspect_ratio=increase,crop={self.width}:{self.height}"
+            
+            cmd = (
+                f"ffmpeg -y -loop 1 -i \"{image_path}\" "
+                f"-t {use_duration} -r 15 -c:v libx264 -preset ultrafast -crf 26 "
+                f"-vf \"{scale_filter},{drawtext_filters},format=yuv420p\" "
+                f"-threads 1 \"{output_path}\""
+            )
+            
+            logger.info(f"Rendering scene {index}: {original_word_count} words, cmd: {cmd[:200]}...")
+            
+            # Increase timeout for animated subtitles - need more time for multiple drawtext filters
+            timeout = 120 if original_word_count > 5 else 90
+            try:
+                result = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                raise Exception(f"FFmpeg timeout after {timeout}s")
+            
+            if result.returncode != 0:
+                err_msg = result.stderr.decode() if result.stderr else 'unknown'
+                raise Exception(f"FFmpeg failed: {err_msg[:500]}")
+            return output_path
+            
+        except Exception as e:
+            logger.warning(f"Animated subtitles failed: {e}, using simple static")
+            return self._create_simple_subtitle_video(image_path, duration, index, clean_text)
+
+    def _create_simple_subtitle_video(self, image_path, duration, index, text):
+        """Fallback: simple static subtitles without animation."""
+        output_path = os.path.join(self.video_dir, f"clip_{index:03d}.mp4")
         
-        drawtext_filters = self._build_word_animated_filter(
-            words, word_times, wrapped_lines, use_duration, line_count
+        wrapped = textwrap.wrap(text, width=20, break_long_words=False)
+        wrapped_text = "\\n".join(wrapped).replace("'", "\\'")
+        
+        drawtext = (
+            f"drawtext=text='{wrapped_text}':fontcolor=white:fontsize=42:"
+            f"x=(w-text_w)/2:y=h*0.65-text_h/2:"
+            f"borderw=2:bordercolor=black:"
+            f"box=1:boxcolor=black@0.35:boxborderw=12"
         )
-        
-        scale_filter = f"scale={self.width}:{self.height}:force_original_aspect_ratio=increase,crop={self.width}:{self.height}"
         
         cmd = (
             f"ffmpeg -y -loop 1 -i \"{image_path}\" "
-            f"-t {use_duration} -r 15 -c:v libx264 -preset ultrafast -crf 26 "
-            f"-vf \"{scale_filter},{drawtext_filters},format=yuv420p\" "
+            f"-t {duration} -r 15 -c:v libx264 -preset ultrafast -crf 26 "
+            f"-vf \"scale={self.width}:{self.height}:force_original_aspect_ratio=increase,crop={self.width}:{self.height},{drawtext},format=yuv420p\" "
             f"-threads 1 \"{output_path}\""
         )
         
-        logger.info(f"Rendering scene {index}: {original_word_count} words animated, {line_count} lines")
-        subprocess.run(cmd, shell=True, check=True, capture_output=True)
+        logger.info(f"Rendering simple static subtitle for scene {index}")
+        result = subprocess.run(cmd, shell=True, capture_output=True, timeout=60)
+        if result.returncode != 0:
+            raise Exception(f"Simple subtitle FFmpeg failed: {result.stderr.decode()[:300] if result.stderr else 'unknown'}")
         return output_path
 
     def _calculate_word_timing(self, words, duration):
@@ -177,22 +214,18 @@ class VideoProcessor:
     def _build_word_animated_filter(self, words, word_times, wrapped_lines, duration, line_count):
         """
         Build FFmpeg drawtext filter for word-by-word animated display.
-        
-        Features:
-        - Each word appears progressively with enable=between(t,start,end)
-        - Keywords highlighted in cyan, others in white
-        - Semi-transparent box background
-        - Centered horizontally, TikTok-safe vertical position
-        - Words display in sentence flow, fading out after full sentence appears
+        Simplified version with proper escaping and hex colors.
         """
         valid_words = [w for w in words if w]
-        keywords = self._detect_keywords(valid_words)
+        if not valid_words:
+            return "drawtext=text=' ':fontcolor=white:fontsize=42:x=(w-text_w)/2:y=h*0.65"
         
         font_size = 42
         box_padding = 12
         box_color = "black@0.35"
         
         full_text = ' '.join(valid_words)
+        
         keyword_indices = set()
         for i, w in enumerate(valid_words):
             if len(w) >= 4 and w.lower() not in {'that', 'this', 'which', 'with', 'from', 'have', 'were', 'been', 'they', 'their'}:
@@ -203,31 +236,34 @@ class VideoProcessor:
         for idx, (word, (start, end)) in enumerate(zip(valid_words, word_times[:len(valid_words)])):
             clean_word = re.sub(r'[^\w]', '', word)
             is_keyword = idx in keyword_indices
-            fontcolor = "0x00FFFF" if is_keyword else "white"
+            fontcolor = "#00FFFF" if is_keyword else "white"
+            
+            escaped_word = word.replace("'", "\\'")
+            
+            start_str = f"{start:.2f}"
+            end_str = f"{end:.2f}"
             
             dt = (
-                f"drawtext=text='{word}':fontcolor={fontcolor}:fontsize={font_size}:"
+                f"drawtext=text='{escaped_word}':fontcolor={fontcolor}:fontsize={font_size}:"
                 f"x=(w-text_w)/2:y=h*0.65-text_h/2:"
                 f"borderw=2:bordercolor=black:"
                 f"box=1:boxcolor={box_color}:boxborderw={box_padding}:"
-                f"enable='between(t,{start},{end})'"
+                f"enable='between(t,{start_str},{end_str})'"
             )
             word_filters.append(dt)
         
-        show_full_filter = [
-            f"drawtext=text='{full_text}':fontcolor=white:fontsize={font_size}:"
+        escaped_full = full_text.replace("'", "\\'")
+        
+        show_full = (
+            f"drawtext=text='{escaped_full}':fontcolor=white:fontsize={font_size}:"
             f"x=(w-text_w)/2:y=h*0.65-text_h/2:"
             f"borderw=2:bordercolor=black:"
             f"box=1:boxcolor={box_color}:boxborderw={box_padding}:"
-            f"enable='gt(t,{duration * 0.85})'"
-        ]
+            f"enable='gte(t,{duration * 0.85:.2f})'"
+        )
+        word_filters.append(show_full)
         
-        all_filters = word_filters + show_full_filter
-        
-        if not all_filters:
-            return f"drawtext=text=' ':fontcolor=white:fontsize={font_size}:x=(w-text_w)/2:y=h*0.5"
-        
-        return ",".join(all_filters)
+        return ",".join(word_filters)
 
     def assemble_video(self, clip_paths, audio_path, srt_path):
         """
