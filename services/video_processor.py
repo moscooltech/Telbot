@@ -135,11 +135,12 @@ class VideoProcessor:
         output_path = os.path.join(self.video_dir, f"clip_{index:03d}.mp4")
         
         wrapped = textwrap.wrap(text, width=20, break_long_words=False)
-        wrapped_text = "\\n".join(wrapped)
+        if not wrapped:
+            wrapped = [text[:20]] if text else [" "]
         
-        double_quote_escaped = wrapped_text.replace('"', '\\"')
+        safe_text = " ".join(wrapped).replace(":", "\\:").replace("'", "''").replace("\\", "\\\\")
         drawtext = (
-            f"drawtext=text=\"{double_quote_escaped}\":fontcolor=white:fontsize=42:"
+            f"drawtext=text='{safe_text}':fontcolor=white:fontsize=42:"
             f"x=(w-text_w)/2:y=h*0.65-text_h/2:"
             f"borderw=2:bordercolor=black:"
             f"box=1:boxcolor=black@0.35:boxborderw=12"
@@ -159,7 +160,7 @@ class VideoProcessor:
         result = subprocess.run(cmd, capture_output=True, timeout=60)
         if result.returncode != 0:
             err = result.stderr.decode() if result.stderr else 'unknown'
-            raise Exception(f"Simple subtitle FFmpeg failed: {err[:300]}")
+            raise Exception(f"Simple subtitle FFmpeg failed: {err[:500]}")
         return output_path
 
     def _calculate_word_timing(self, words, duration):
@@ -243,13 +244,13 @@ class VideoProcessor:
             is_keyword = idx in keyword_indices
             fontcolor = "#00FFFF" if is_keyword else "white"
             
-            double_escaped = word.replace('"', '\\"')
+            safe_word = word.replace(":", "\\:").replace("'", "''")
             
             start_str = f"{start:.2f}"
             end_str = f"{end:.2f}"
             
             dt = (
-                f"drawtext=text=\"{double_escaped}\":fontcolor={fontcolor}:fontsize={font_size}:"
+                f"drawtext=text='{safe_word}':fontcolor={fontcolor}:fontsize={font_size}:"
                 f"x=(w-text_w)/2:y=h*0.65-text_h/2:"
                 f"borderw=2:bordercolor=black:"
                 f"box=1:boxcolor={box_color}:boxborderw={box_padding}:"
@@ -257,10 +258,10 @@ class VideoProcessor:
             )
             word_filters.append(dt)
         
-        double_escaped_full = full_text.replace('"', '\\"')
+        safe_full = full_text.replace(":", "\\:").replace("'", "''")
         
         show_full = (
-            f"drawtext=text=\"{double_escaped_full}\":fontcolor=white:fontsize={font_size}:"
+            f"drawtext=text='{safe_full}':fontcolor=white:fontsize={font_size}:"
             f"x=(w-text_w)/2:y=h*0.65-text_h/2:"
             f"borderw=2:bordercolor=black:"
             f"box=1:boxcolor={box_color}:boxborderw={box_padding}:"

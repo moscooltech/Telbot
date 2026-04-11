@@ -5,6 +5,36 @@ import time
 from config import MIN_SCENES, MAX_SCENES, VIDEO_DURATION_PER_SCENE, RENDER_FREE_TIER
 from services.llm_service import LLMService
 
+
+def detect_scene_count(prompt):
+    """
+    Parse user prompt to detect desired scene count.
+    Returns: (min_scenes, max_scenes) tuple or None if not specified.
+    """
+    lower = prompt.lower()
+    
+    patterns = [
+        r'(\d+)\s*(?:scene|clip|image|picture|visual)s?',
+        r'(\d+)\s*(?:image|picture|visual)',
+        r'(?:use|create|make|generate)\s*(\d+)',
+        r'(\d+)\s*(?:long|short)\s*(?:audio|video)',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, lower)
+        if match:
+            count = int(match.group(1))
+            if 1 <= count <= MAX_SCENES:
+                return (max(1, count - 1), min(count + 1, MAX_SCENES))
+    
+    if 'long audio' in lower or 'single image' in lower or 'one image' in lower:
+        return (1, 3)
+    elif 'short' in lower or 'quick' in lower:
+        return (2, 4)
+    
+    return None
+
+
 def clean_narration(text):
     """Clean and fix common punctuation issues in generated text."""
     if not text:
@@ -67,19 +97,24 @@ class SceneGenerator:
         """
         AI Production Agent: Writes a full professional script and plans explainer visuals.
         """
+        detected = detect_scene_count(prompt)
+        if detected:
+            min_s, max_s = detected
+        else:
+            min_s, max_s = MIN_SCENES, MAX_SCENES
+        
         system_prompt = f"""
 You are a Professional AI Video Producer. Your task: Convert the user's prompt into a high-quality educational/viral video script.
 
 Requirements:
-- Write a UNIQUE narration for EACH of the {MIN_SCENES} to {MAX_SCENES} scenes.
+- Write a UNIQUE narration for EACH of the {min_s} to {max_s} scenes.
 - Each scene must follow a strict "Narration" and "Description" format.
 - "narration": What is spoken. Must be 20-30 words of natural, engaging text with proper grammar and punctuation.
 - "description": What is shown visually. Detailed scene description for an image generator.
 - NEVER include "scene 1", "scene 2", "step 1", or any numbering in the narration.
 - Use proper punctuation: periods, commas, and capital letters after periods.
 - Scene 1: Strong hook.
-- Scene 2-7: Educational/story content.
-- Scene 8: Call to action.
+- Last scene: Call to action.
 
 Output JSON ONLY:
 {{
@@ -93,6 +128,8 @@ Output JSON ONLY:
   "hashtags": ["tag1", "tag2"]
 }}
 """
+        
+        print(f"=== Scene count: {min_s}-{max_s} (detected: {detected is not None})")
         
         for attempt in range(retry):
             try:
@@ -119,8 +156,9 @@ Output JSON ONLY:
                         data = json.loads(content)
 
                 raw_scenes = data.get("scenes", [])
-                if len(raw_scenes) < MIN_SCENES:
-                    raise Exception("AI script too short")
+                min_required = min_s if detected else MIN_SCENES
+                if len(raw_scenes) < min_required:
+                    raise Exception(f"AI script too short: got {len(raw_scenes)}, expected {min_required}")
 
                 # Debug: print raw narration before cleaning
                 if raw_scenes:
