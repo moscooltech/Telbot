@@ -276,7 +276,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                     message_id=status_msg_id,
                     text=f"🎬 **Step 4/5:** Processing video clips... ({i+1}/{num_clips})"
                 )
-            clip = vp.create_scene_video(img_path, dur, i, scene_text) # Pass selected text
+            clip = vp.create_scene_video(img_path, dur, i, scene_text, dur)  # Pass duration for sync
             clip_paths.append(clip)
             
         if status_msg_id:
