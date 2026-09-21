@@ -1,9 +1,12 @@
 # Use an official Python runtime as a parent image
 FROM python:3.9-slim
 
-# Install system dependencies
+# Install system dependencies:
+# - ffmpeg (video/audio pipeline, includes libass for karaoke subtitles)
+# - fonts-dejavu-core (bold font for libass subtitle rendering)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory in the container

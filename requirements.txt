@@ -1,12 +1,8 @@
 python-telegram-bot==20.7
 requests
-ffmpeg-python
-Pillow
 gTTS
 edge-tts
 python-dotenv
 aiohttp
 fastapi
 uvicorn[standard]
-moviepy
-bytez

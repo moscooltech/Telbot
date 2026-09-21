@@ -12,11 +12,16 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
 BYTEZ_API_KEY = os.getenv("BYTEZ_API_KEY", "")
 
-# Default Models
-GROQ_MODEL = "llama-3.3-70b-versatile"
-GEMINI_MODEL = "gemini-1.5-flash"
+# Default Models (verified September 2026)
+# NOTE: Llama 3.3 70B left Groq's free tier on 2026-08-16 -> gpt-oss-120b is the free replacement.
+GROQ_MODEL = "openai/gpt-oss-120b"
+# NOTE: gemini-1.5-flash is shut down -> 2.5 Flash is the current free-tier model.
+GEMINI_MODEL = "gemini-2.5-flash"
 POLLINATIONS_MODEL = "openai"
-BYTEZ_MODEL = "google/gemma-2-9b-it" # Standard LLM fallback
+# Bytez serves text and image models under different names. The image model is
+# reserved (images are generated via Pollinations); the LLM fallback uses the text model.
+BYTEZ_LLM_MODEL = "google/gemma-2-9b-it"
+BYTEZ_IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 
 # Directories
 TEMP_DIR = "temp"
@@ -26,13 +31,11 @@ FONTS_DIR = "assets/fonts"
 
 # Image Generation - OPTIMIZED FOR 512MB RAM
 POLLINATIONS_URL = "https://gen.pollinations.ai/image/{prompt}"
-POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
 IMAGE_WIDTH = 720      # Reduced from 1080 (saves 33% memory)
 IMAGE_HEIGHT = 1280    # Reduced from 1920 (saves 33% memory)
-
-# Bytez fallback configuration (if used)
-BYTEZ_API_KEY = os.getenv("BYTEZ_API_KEY", "")
-BYTEZ_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
+IMAGE_MODELS = ["flux-dev", "flux"]   # tried in order, first success wins
+CONSISTENT_SEED = True                # one base seed per job -> coherent look across scenes
+IMAGE_PROMPT_MAX_WORDS = 20
 
 # Video Settings - AGENTIC PLANNING
 MIN_SCENES = 8                      # Minimum scenes for 40s+
@@ -40,15 +43,36 @@ MAX_SCENES = 20                     # Maximum scenes for RAM safety
 VIDEO_DURATION_PER_SCENE = 6        # Targeted seconds per scene
 ASPECT_RATIO = "9:16"               # TikTok format
 
+# Scene alignment (story spine + relevance self-check)
+ENABLE_RELEVANCE_CHECK = True
+RELEVANCE_MIN_SCORE = 7             # scenes scoring below this get one rewrite against the motive
+MAX_SCENE_REWRITES = 4              # cap rewrites per video to bound latency
+
 # FFmpeg Optimization for Free Tier
 FFMPEG_PRESET = "veryfast"          # 40% faster encoding
 FFMPEG_CRF = 22                     # Quality (0-51, 22 is good)
 FFMPEG_THREADS = 2                  # Limit CPU threads
 
-# Audio Settings - NARRATION ONLY (NO BACKGROUND MUSIC)
+# Audio Settings
 AUDIO_BITRATE = "64k"               # Low bitrate for TTS
 AUDIO_SAMPLE_RATE = 22050           # Sufficient for TTS
 SKIP_BACKGROUND_MUSIC = True        # Disable background music
+ENABLE_LOUDNORM = True              # Normalize loudness across scenes (-14 LUFS streaming standard)
+
+# TTS
+TTS_VOICE = os.getenv("TTS_VOICE", "en-US-AndrewMultilingualNeural")
+TTS_RATE = os.getenv("TTS_RATE", "+5%")
+TTS_VOLUME = os.getenv("TTS_VOLUME", "+0%")
+# Optional offline fallback (requires: pip install piper-tts + a .onnx voice file)
+ENABLE_PIPER = os.getenv("ENABLE_PIPER", "false").lower() == "true"
+PIPER_VOICE_PATH = os.getenv("PIPER_VOICE_PATH", "")
+
+# Subtitles (ASS/libass karaoke rendering)
+SUBTITLE_WORDS_PER_CHUNK = int(os.getenv("SUBTITLE_WORDS_PER_CHUNK", "2"))
+SUBTITLE_FONT_SIZE = int(os.getenv("SUBTITLE_FONT_SIZE", "54"))
+SUBTITLE_FONT_NAME = os.getenv("SUBTITLE_FONT_NAME", "DejaVu Sans")
+SUBTITLE_MARGIN_V = int(os.getenv("SUBTITLE_MARGIN_V", "210"))   # bottom safe zone (~16% of 1280)
+SUBTITLE_MARGIN_LR = int(os.getenv("SUBTITLE_MARGIN_LR", "60"))
 
 # Memory Management
 MAX_MEMORY_MB = 380                 # Safety threshold
