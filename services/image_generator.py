@@ -10,6 +10,7 @@ from config import (
     POLLINATIONS_API_KEY, BYTEZ_API_KEY, TEMP_DIR, IMAGE_WIDTH, IMAGE_HEIGHT,
     CONSISTENT_SEED, IMAGE_PROMPT_MAX_WORDS, POLLINATIONS_ENHANCE,
     BYTEZ_IMAGE_MODEL, IMAGE_LEGACY_MODEL, IMAGE_TIMEOUT,
+    GEMINI_API_KEY, GEMINI_IMAGE_MODELS, GEMINI_IMAGE_ASPECT,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,50 @@ class ImageGenerator:
         return response.content
 
     # ------------------------------------------------------------------
-    # Provider 2: gen.pollinations.ai — needs POLLINATIONS_API_KEY, richer models
+    # Provider 2: Gemini (Nano Banana) — photorealistic, free tier, and the
+    # same GEMINI_API_KEY already used for text unlocks it. REST shape:
+    # POST /v1beta/models/{model}:generateContent with responseModalities
+    # [TEXT, IMAGE]; the image comes back as inlineData base64 PNG.
+    # ------------------------------------------------------------------
+    def _generate_gemini(self, prompt: str, seed: Optional[int], model: str,
+                         timeout: int) -> bytes:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"],
+                "imageConfig": {"aspectRatio": GEMINI_IMAGE_ASPECT},
+            },
+        }
+        response = requests.post(
+            url, json=payload,
+            headers={
+                "x-goog-api-key": GEMINI_API_KEY,
+                "Content-Type": "application/json",
+            },
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            raise Exception(f"gemini {model} returned {response.status_code}: {response.text[:200]}")
+
+        data = response.json()
+        image_bytes = None
+        for candidate in data.get("candidates", []):
+            for part in candidate.get("content", {}).get("parts", []):
+                inline = part.get("inlineData") or part.get("inline_data")
+                if inline and inline.get("data"):
+                    image_bytes = base64.b64decode(inline["data"])
+                    break
+            if image_bytes:
+                break
+        if not image_bytes:
+            # Surface refusal/blocked reasons so failures are diagnosable
+            reason = (data.get("candidates") or [{}])[0].get("finishReason", "no image part")
+            raise Exception(f"gemini {model} returned no image ({reason})")
+        return image_bytes
+
+    # ------------------------------------------------------------------
+    # Provider 3: gen.pollinations.ai — needs POLLINATIONS_API_KEY, richer models
     # ------------------------------------------------------------------
     def _generate_pollinations_gen(self, prompt: str, seed: Optional[int], model: str,
                                    timeout: int) -> bytes:
@@ -158,12 +202,20 @@ class ImageGenerator:
                            key, PROVIDER_COOLDOWN_SECONDS, stats["fails"])
 
     def _provider_chain(self) -> List[tuple]:
-        """Ordered fallback chain: keyless first, then keyed providers.
+        """Ordered fallback chain: photorealistic Gemini first (when a key exists),
+        then keyless Pollinations, then keyed Pollinations and Bytez.
         Each entry: (name, callable(prompt, seed, model, timeout) -> bytes, model or None).
         Providers in failure cooldown are skipped, unless that would leave the chain empty."""
-        chain = [
-            ("pollinations-legacy", self._generate_pollinations_legacy, IMAGE_LEGACY_MODEL),
-        ]
+        chain: List[tuple] = []
+        if GEMINI_API_KEY:
+            # Nano Banana models are photorealistic; try current one first,
+            # older as fallback (gemini-2.5-flash-image retires 2026-10-02).
+            for model in GEMINI_IMAGE_MODELS:
+                chain.append(("gemini", self._generate_gemini, model.strip()))
+        # Keyless Pollinations serves "sana" (weak/cartoonish model) but always works.
+        chain.append(
+            ("pollinations-legacy", self._generate_pollinations_legacy, IMAGE_LEGACY_MODEL)
+        )
         if POLLINATIONS_API_KEY:
             # Order matters: retry with a fresh generation when one fails; models listed first win.
             for model in ("flux", "turbo"):

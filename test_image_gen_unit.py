@@ -38,14 +38,26 @@ def fake_response(status=200, body=JPEG_MAGIC + b"x" * 5000):
 
 
 print("== 1. provider chain composition ==")
-with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
+with mock.patch.object(ig_mod, "GEMINI_API_KEY", ""), \
+     mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
      mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""):
     gen = make_gen()
     chain = gen._provider_chain()
     check("keyless chain is legacy only", [c[0] for c in chain] == ["pollinations-legacy"],
           str([c[0] for c in chain]))
 
-with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", "k"), \
+with mock.patch.object(ig_mod, "GEMINI_API_KEY", "g"), \
+     mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
+     mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""):
+    gen = make_gen()
+    chain = gen._provider_chain()
+    check("gemini first when key set", [c[0] for c in chain][0] == "gemini",
+          str([c[0] for c in chain]))
+    check("gemini models from config", [c[2] for c in chain][:len(config.GEMINI_IMAGE_MODELS)]
+          == [m.strip() for m in config.GEMINI_IMAGE_MODELS], str([c[2] for c in chain]))
+
+with mock.patch.object(ig_mod, "GEMINI_API_KEY", ""), \
+     mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", "k"), \
      mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""):
     gen = make_gen()
     chain = gen._provider_chain()
@@ -55,7 +67,8 @@ with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", "k"), \
     check("gen models are flux then turbo", [c[2] for c in chain][1:] == ["flux", "turbo"],
           str([c[2] for c in chain]))
 
-with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", "k"), \
+with mock.patch.object(ig_mod, "GEMINI_API_KEY", ""), \
+     mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", "k"), \
      mock.patch.object(ig_mod, "BYTEZ_API_KEY", "b"):
     gen = make_gen()
     chain = gen._provider_chain()
@@ -72,7 +85,8 @@ check("html error page rejected",
       not ImageGenerator._is_image(fake_response(body=b"<html>error</html>")))
 
 print("== 3. failure cooldown ==")
-with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", "test-key"), \
+with mock.patch.object(ig_mod, "GEMINI_API_KEY", ""), \
+     mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", "test-key"), \
      mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""):
     gen = make_gen()
     legacy_key = gen._provider_key("pollinations-legacy", config.IMAGE_LEGACY_MODEL)

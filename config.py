@@ -12,6 +12,14 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
 BYTEZ_API_KEY = os.getenv("BYTEZ_API_KEY", "")
 
+# Gemini image generation (Nano Banana) - photorealistic, included in the Gemini free tier.
+# The same GEMINI_API_KEY used for text also unlocks image generation.
+# NOTE: gemini-2.5-flash-image retires on the API on 2026-10-02; keep 3.1 first.
+GEMINI_IMAGE_MODELS = os.getenv(
+    "GEMINI_IMAGE_MODELS", "gemini-3.1-flash-image,gemini-2.5-flash-image"
+).split(",")
+GEMINI_IMAGE_ASPECT = os.getenv("GEMINI_IMAGE_ASPECT", "9:16")
+
 # Default Models (verified September 2026)
 # NOTE: Llama 3.3 70B left Groq's free tier on 2026-08-16 -> gpt-oss-120b is the free replacement.
 GROQ_MODEL = "openai/gpt-oss-120b"

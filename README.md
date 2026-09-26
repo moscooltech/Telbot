@@ -8,7 +8,7 @@ A fully automated Telegram bot that transforms a text prompt into a viral-ready 
 
 1. **Script (2-pass, aligned)** — the LLM first writes a *story spine* (motive, style bible, beats, hook, CTA), then writes every scene **from that spine** so scenes never drift off-topic. A cheap reviewer pass scores each scene 1–10 against the motive and auto-rewrites weak ones.
 2. **Approval** — you get a script preview with ✅ Proceed / 🔄 Regenerate buttons.
-3. **Images** — Pollinations (Flux) via a 3-provider fallback chain: keyless legacy endpoint → keyed gen.pollinations.ai → Bytez (SDXL), with the **style bible + one consistent seed per job** so all scenes look like one video. Works with zero image-API keys.
+3. **Images** — a priority fallback chain: **Gemini "Nano Banana" (photorealistic, uses your existing `GEMINI_API_KEY`, free tier)** → keyless Pollinations → keyed Pollinations (Flux) → Bytez (SDXL), with the **style bible + one consistent seed per job** so all scenes look like one video. Keyless Pollinations serves a weak model (sana) that looks cartoonish — set `GEMINI_API_KEY` for realistic images.
 4. **Voice** — edge-tts (`en-US-AndrewMultilingualNeural` by default, configurable via `TTS_VOICE`/`TTS_RATE`), with loudness normalization (-14 LUFS) and gTTS fallback. **Real word-level timings** are captured from the TTS engine.
 5. **Video** — per-scene clips with **TikTok-style karaoke subtitles**: words appear in 2–3 word chunks and the current word highlights **in perfect sync with the voice** (timings come from the TTS engine itself, not estimates). Bold font, safe-zone positioning, static-subtitle fallback if libass ever fails.
 6. **Assembly** — stream-copy concat (≈0 RAM) + audio mux, uploaded to Telegram with caption + hashtags.
