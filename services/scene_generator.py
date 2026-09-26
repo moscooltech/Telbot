@@ -146,9 +146,12 @@ class SceneGenerator:
             "- Every scene MUST clearly serve the motive above. Never drift off-topic.\n"
             "- Follow the beat structure: scene 1 is the hook, the last scene is the call to action.\n"
             '- "narration": 20-30 words of natural spoken text, proper grammar/punctuation, no "scene N"/"step N" numbering.\n'
-            '- "description": a vivid image-generation prompt. It MUST reuse the same subject/setting/style as the style bible so all scenes look like one video.\n\n'
+            '- "description": a vivid image-generation prompt. It MUST reuse the same subject/setting/style as the style bible so all scenes look like one video.\n'
+            '- "caption": a complete, natural social-media post caption for the finished video: '
+            '2-4 sentences (~150-300 characters) describing what the video shows and why it is '
+            "worth watching. NEVER write placeholders like 'viral hook', 'viral reel' or 'amazing video'.\n\n"
             "Output JSON ONLY:\n"
-            '{"scenes": [{"narration": "...", "description": "..."}], "caption": "viral hook", "hashtags": ["tag1", "tag2"]}'
+            '{"scenes": [{"narration": "...", "description": "..."}], "caption": "2-4 sentence post caption about the video", "hashtags": ["tag1", "tag2"]}'
         )
         content = self.llm.generate_text(
             system_prompt, f"Topic: {prompt}", temperature=0.7, timeout=90, json_mode=True
@@ -296,8 +299,16 @@ class SceneGenerator:
                     except Exception as e:
                         logger.warning("Prompt polish skipped (falling back to raw descriptions): %s", e)
 
+                # Caption: demand a real post caption; if the LLM still returned a
+                # short placeholder, fall back to the richer spine fields.
+                caption = (data.get("caption") or "").strip()
+                if len(caption) < 40:
+                    hook = (spine.get("hook") or "").strip()
+                    cta = (spine.get("cta") or "").strip()
+                    caption = "\n\n".join(x for x in (hook, cta) if x).strip() or spine["motive"]
+
                 metadata = {
-                    "caption": data.get("caption", prompt[:30]),
+                    "caption": caption,
                     "hashtags": " ".join(data.get("hashtags", ["#ai", "#education"])),
                     "motive": spine["motive"],
                     "style_bible": spine["style_bible"],
