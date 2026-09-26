@@ -5,6 +5,7 @@ import logging
 from config import (
     MIN_SCENES, MAX_SCENES,
     ENABLE_RELEVANCE_CHECK, RELEVANCE_MIN_SCORE, MAX_SCENE_REWRITES,
+    ENABLE_PROMPT_POLISH,
 )
 from services.llm_service import LLMService
 
@@ -199,6 +200,36 @@ class SceneGenerator:
         )
         return extract_json(content)
 
+    def _polish_visuals(self, spine, scenes):
+        """
+        Prompt-engineering pass: rewrite every scene description into a
+        structured image prompt (subject -> action -> setting -> shot ->
+        lighting -> style), locked to the style bible so all images
+        look like one coherent video.
+        """
+        system_prompt = (
+            "You are an expert prompt engineer for text-to-image models (Flux, SDXL).\n"
+            "For each numbered scene description below, rewrite it into ONE polished image prompt.\n\n"
+            f"Style bible (keep this identity in EVERY prompt): {spine['style_bible'] or 'invent one consistent style and reuse it'}\n"
+            "Motive (what the video is about): " + spine["motive"] + "\n\n"
+            "Rules for each prompt:\n"
+            "1. One line, comma-separated layers in this order: main subject with concrete details, action/pose, setting/environment, camera shot (e.g. close-up, wide establishing shot, low angle), lighting, art style/mood.\n"
+            "2. Reuse the same main character/subject description across ALL scenes so they look like the same video.\n"
+            "3. Visual, concrete language only: no abstract ideas, no text/words/numbers/logos in the image, no narration, no 'scene N'.\n"
+            "4. 25-45 words. No quotes. No trailing period.\n\n"
+            "Scene descriptions:\n"
+            + "\n".join(f"{i + 1}. {s.get('description', '')}" for i, s in enumerate(scenes)) + "\n\n"
+            'Output JSON ONLY: {"prompts": ["prompt 1", "prompt 2", ...]} — one polished prompt per scene, same order.'
+        )
+        content = self.llm.generate_text(
+            system_prompt, "Polish the image prompts.", temperature=0.4, timeout=90, json_mode=True
+        )
+        data = extract_json(content)
+        polished = data.get("prompts", [])
+        if not isinstance(polished, list):
+            return None
+        return polished
+
     def generate_all(self, prompt, retry=3):
         """
         AI Production Agent: builds a story spine, writes the script from it,
@@ -253,6 +284,17 @@ class SceneGenerator:
                                 logger.warning("Rewrite of scene %s failed: %s", idx + 1, e)
                     except Exception as e:
                         logger.warning("Relevance check skipped: %s", e)
+
+                # PROMPT POLISH: turn descriptions into structured image prompts (one batch call)
+                if ENABLE_PROMPT_POLISH and visuals:
+                    try:
+                        polished = self._polish_visuals(spine, raw_scenes)
+                        if polished:
+                            for i in range(min(len(visuals), len(polished))):
+                                if isinstance(polished[i], str) and polished[i].strip():
+                                    visuals[i] = polished[i].strip()
+                    except Exception as e:
+                        logger.warning("Prompt polish skipped (falling back to raw descriptions): %s", e)
 
                 metadata = {
                     "caption": data.get("caption", prompt[:30]),

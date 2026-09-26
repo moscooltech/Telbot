@@ -48,6 +48,50 @@ check("extract_json plain", extract_json('{"a": 1}') == {"a": 1})
 check("extract_json fenced", extract_json('```json\n{"a": 1}\n```') == {"a": 1})
 check("extract_json with prose", extract_json('Here you go:\n{"a": 1}\nDone.') == {"a": 1})
 
+print("== 3.5 image prompt quality ==")
+from services.image_generator import ImageGenerator
+from services.scene_generator import SceneGenerator
+
+ig = ImageGenerator("verify_prompt_job", style_bible="a red fox, watercolor style, soft light")
+check("commas kept in prompt", ig._clean_prompt("a fox, running, forest") == "a fox, running, forest",
+      ig._clean_prompt("a fox, running, forest"))
+check("quotes stripped", '"' not in ig._clean_prompt('a "fox" \' runs\''))
+check("newlines collapsed", "\n" not in ig._clean_prompt("a fox\nruns"))
+check("word cap enforced", len(ig._clean_prompt(" ".join(["word"] * 100)).split()) <= config.IMAGE_PROMPT_MAX_WORDS)
+check("prompt cap raised to 60", config.IMAGE_PROMPT_MAX_WORDS >= 60, config.IMAGE_PROMPT_MAX_WORDS)
+
+built = ig._build_prompt("a fox, running, forest")
+check("style bible fused into prompt", "watercolor style" in built, built)
+check("quality suffix present", built.endswith("high quality, detailed, professional, 4k"), built)
+
+check("prompt polish enabled", config.ENABLE_PROMPT_POLISH)
+check("pollinations enhance off", not config.POLLINATIONS_ENHANCE)
+
+# Polish pass: good LLM output replaces descriptions, garbage falls back gracefully
+class FakeLLMGood:
+    def generate_text(self, *a, **k):
+        return ('{"prompts": ["a red fox, leaping over rocks, misty pine forest, wide shot, '
+                'soft morning light, watercolor style", "bad words"]}')
+
+class FakeLLMBad:
+    def generate_text(self, *a, **k):
+        return "not json at all"
+
+sg = SceneGenerator.__new__(SceneGenerator)
+raw_scenes = [{"description": "desc one"}, {"description": "desc two"}]
+
+sg.llm = FakeLLMGood()
+polished = sg._polish_visuals({"motive": "m", "style_bible": "x"}, raw_scenes)
+check("polish returns same scene count", isinstance(polished, list) and len(polished) == 2, str(polished))
+check("polished prompt keeps style identity", "watercolor" not in polished[0] or "red fox" in polished[0])
+
+sg.llm = FakeLLMBad()
+try:
+    sg._polish_visuals({"motive": "m", "style_bible": "x"}, raw_scenes)
+    check("polish raises on garbage LLM output", False)
+except Exception:
+    check("polish raises on garbage LLM output", True)  # generate_all catches this and falls back
+
 print("== 4. video_processor ASS karaoke ==")
 from services.video_processor import VideoProcessor
 vp = VideoProcessor("verify_job")

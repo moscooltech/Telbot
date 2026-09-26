@@ -12,6 +12,7 @@ from services.image_generator import ImageGenerator
 from services.audio_processor import AudioProcessor
 from services.video_processor import VideoProcessor
 from config import TEMP_DIR, MUSIC_DIR, VIDEO_DURATION_PER_SCENE
+import config
 from utils.telegram_api import TelegramAPI
 
 logger = logging.getLogger(__name__)
@@ -136,20 +137,38 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
         # --- PHASE 2: IMAGES (with job-wide style bible for visual coherence) ---
         ig = ImageGenerator(job_id, style_bible=metadata.get("style_bible", ""))
         image_paths = []
+        failed_scenes = 0
         for i, scene in enumerate(scenes):
             path = ig.generate_image(scene, i)
             if path:
                 image_paths.append(path)
-                # Update progress occasionally
-                if i > 0 and i % 3 == 0 and status_msg_id:
-                    TelegramAPI.edit_message(
-                        chat_id=chat_id,
-                        message_id=status_msg_id,
-                        text=f"🖼️ **Step 2/5:** Creating images... ({i}/{len(scenes)})"
-                    )
+            else:
+                failed_scenes += 1
+            # Update progress occasionally
+            if i > 0 and i % 3 == 0 and status_msg_id:
+                TelegramAPI.edit_message(
+                    chat_id=chat_id,
+                    message_id=status_msg_id,
+                    text=f"🖼️ **Step 2/5:** Creating images... ({i + 1}/{len(scenes)})"
+                )
 
+        # Degrade gracefully: a job can lose some scenes and still ship a good video.
         if not image_paths:
             raise Exception("Failed to generate any images.")
+        if failed_scenes:
+            logger.warning("Job %s: %s/%s scenes failed image generation.",
+                           job_id, failed_scenes, len(scenes))
+            if failed_scenes > len(scenes) * (1 - config.IMAGE_MIN_SUCCESS_RATIO):
+                raise Exception(
+                    f"Image generation quality too low: only {len(image_paths)}/{len(scenes)} "
+                    f"scenes succeeded. Please try again."
+                )
+            if status_msg_id:
+                TelegramAPI.edit_message(
+                    chat_id=chat_id,
+                    message_id=status_msg_id,
+                    text=f"⚠️ {failed_scenes} scene(s) failed — continuing with {len(image_paths)}."
+                )
 
         if status_msg_id:
             TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🎙️ **Step 3/5:** Generating AI narration...")

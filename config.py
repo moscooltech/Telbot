@@ -30,18 +30,31 @@ MUSIC_DIR = "assets/music"
 FONTS_DIR = "assets/fonts"
 
 # Image Generation - OPTIMIZED FOR 512MB RAM
-POLLINATIONS_URL = "https://gen.pollinations.ai/image/{prompt}"
+# gen.pollinations.ai now requires an API key (and dropped "flux-dev"); the legacy
+# image.pollinations.ai/prompt endpoint is still free & keyless (verified 2026-09-26).
 IMAGE_WIDTH = 720      # Reduced from 1080 (saves 33% memory)
 IMAGE_HEIGHT = 1280    # Reduced from 1920 (saves 33% memory)
-IMAGE_MODELS = ["flux-dev", "flux"]   # tried in order, first success wins
+IMAGE_LEGACY_MODEL = "flux"           # model hint on the keyless legacy endpoint
+IMAGE_TIMEOUT = 120                   # legacy endpoint can queue for ~45s per image
+IMAGE_MIN_BYTES = 3000                # smaller payloads are error pages, not photos
 CONSISTENT_SEED = True                # one base seed per job -> coherent look across scenes
-IMAGE_PROMPT_MAX_WORDS = 20
+IMAGE_PROMPT_MAX_WORDS = 60           # commas structure image prompts; 20 words loses style details
+
+# Prompt engineering pass: rewrite scene descriptions into structured image prompts
+ENABLE_PROMPT_POLISH = True
+
+# Pollinations server-side prompt rewriting (rewrites curated prompts -> usually off)
+POLLINATIONS_ENHANCE = False
 
 # Video Settings - AGENTIC PLANNING
 MIN_SCENES = 8                      # Minimum scenes for 40s+
 MAX_SCENES = 20                     # Maximum scenes for RAM safety
 VIDEO_DURATION_PER_SCENE = 6        # Targeted seconds per scene
 ASPECT_RATIO = "9:16"               # TikTok format
+
+# Scenes must still be worth rendering even if a few images failed; below this ratio
+# the job aborts with a clear message instead of shipping a mostly-broken video.
+IMAGE_MIN_SUCCESS_RATIO = 0.5
 
 # Scene alignment (story spine + relevance self-check)
 ENABLE_RELEVANCE_CHECK = True
