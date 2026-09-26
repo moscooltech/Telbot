@@ -12,13 +12,30 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
 BYTEZ_API_KEY = os.getenv("BYTEZ_API_KEY", "")
 
-# Gemini image generation (Nano Banana) - photorealistic, included in the Gemini free tier.
-# The same GEMINI_API_KEY used for text also unlocks image generation.
-# NOTE: gemini-2.5-flash-image retires on the API on 2026-10-02; keep 3.1 first.
+# Gemini image generation (Nano Banana) - NOTE: image models have ZERO free-tier
+# API quota (text works free, images do not). Only useful with a paid key.
+# Keep it in the chain behind Cloudflare; it is skipped automatically on 429s.
 GEMINI_IMAGE_MODELS = os.getenv(
     "GEMINI_IMAGE_MODELS", "gemini-3.1-flash-image,gemini-2.5-flash-image"
 ).split(",")
 GEMINI_IMAGE_ASPECT = os.getenv("GEMINI_IMAGE_ASPECT", "9:16")
+
+# Cloudflare Workers AI - real SDXL on a generous free tier:
+# 10,000 Neurons/day free, ~30 Neurons per 576x1024 image => ~300 photorealistic images/day.
+# Setup (both values come from a FREE Cloudflare account):
+#   Account ID: dash.cloudflare.com -> Workers & Pages -> right sidebar "Account ID"
+#   API Token:  dash.cloudflare.com/profile/api-tokens -> Create Token ->
+#               template "Run Cloudflare Workers AI models"
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
+CLOUDFLARE_IMAGE_MODEL = os.getenv(
+    "CLOUDFLARE_IMAGE_MODEL", "@cf/stabilityai/stable-diffusion-xl-base-1.0"
+)
+# Conservative negative prompt (style bible still controls the artistic style)
+IMAGE_NEGATIVE_PROMPT = os.getenv(
+    "IMAGE_NEGATIVE_PROMPT",
+    "low quality, blurry, deformed, extra fingers, watermark, text, logo, oversaturated",
+)
 
 # Default Models (verified September 2026)
 # NOTE: Llama 3.3 70B left Groq's free tier on 2026-08-16 -> gpt-oss-120b is the free replacement.

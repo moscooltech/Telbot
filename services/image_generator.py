@@ -11,6 +11,8 @@ from config import (
     CONSISTENT_SEED, IMAGE_PROMPT_MAX_WORDS, POLLINATIONS_ENHANCE,
     BYTEZ_IMAGE_MODEL, IMAGE_LEGACY_MODEL, IMAGE_TIMEOUT,
     GEMINI_API_KEY, GEMINI_IMAGE_MODELS, GEMINI_IMAGE_ASPECT,
+    CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, CLOUDFLARE_IMAGE_MODEL,
+    IMAGE_NEGATIVE_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,9 +74,52 @@ class ImageGenerator:
         return content[:3] == JPEG_MAGIC or content[:8] == PNG_MAGIC[:8]
 
     # ------------------------------------------------------------------
-    # Provider 1: legacy image.pollinations.ai — keyless, free, still alive
-    # (gen.pollinations.ai started requiring an API key for every model and
-    # dropped "flux-dev"; this legacy endpoint kept working without one.)
+    # Provider 1: Cloudflare Workers AI — REAL SDXL on a generous free tier
+    # (10,000 Neurons/day ≈ 300 images). Needs a free Cloudflare API token.
+    # Native width/height support -> true 9:16 output, plus negative prompts.
+    # ------------------------------------------------------------------
+    def _generate_cloudflare(self, prompt: str, seed: Optional[int], model: str,
+                             timeout: int) -> bytes:
+        url = (f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}"
+               f"/ai/run/{model}")
+        payload = {
+            "prompt": prompt[:2048],
+            "width": self.width,
+            "height": self.height,
+            "num_steps": 12,
+            "negative_prompt": IMAGE_NEGATIVE_PROMPT,
+        }
+        if seed is not None:
+            payload["seed"] = seed
+
+        response = requests.post(
+            url, json=payload,
+            headers={"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}"},
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            raise Exception(f"cloudflare returned {response.status_code}: {response.text[:200]}")
+
+        # Binary responses come as a raw image stream; JSON responses carry base64.
+        content_type = response.headers.get("Content-Type", "")
+        if "application/json" in content_type:
+            data = response.json()
+            if not data.get("success", True):
+                raise Exception(f"cloudflare error: {str(data.get('errors'))[:200]}")
+            result = data.get("result", {})
+            b64 = result.get("image") if isinstance(result, dict) else None
+            if not b64:
+                raise Exception("cloudflare response had no image data")
+            return base64.b64decode(b64)
+
+        raw = response.content
+        if not (raw[:3] == JPEG_MAGIC or raw[:8] == PNG_MAGIC[:8]):
+            raise Exception("cloudflare stream was not a valid image")
+        return raw
+
+    # ------------------------------------------------------------------
+    # Provider 2: legacy image.pollinations.ai — keyless, free, always works,
+    # but serves its weak "sana" model (cartoonish look). Safety net only.
     # ------------------------------------------------------------------
     def _generate_pollinations_legacy(self, prompt: str, seed: Optional[int], model: str,
                                       timeout: int) -> bytes:
@@ -98,8 +143,9 @@ class ImageGenerator:
         return response.content
 
     # ------------------------------------------------------------------
-    # Provider 2: Gemini (Nano Banana) — photorealistic, free tier, and the
-    # same GEMINI_API_KEY already used for text unlocks it. REST shape:
+    # Provider 3: Gemini (Nano Banana) — photorealistic, but image models have
+    # ZERO free-tier API quota (text is free, images are not). Skipped on 429s
+    # by the cooldown logic; useful only with a paid key. REST shape:
     # POST /v1beta/models/{model}:generateContent with responseModalities
     # [TEXT, IMAGE]; the image comes back as inlineData base64 PNG.
     # ------------------------------------------------------------------
@@ -141,7 +187,7 @@ class ImageGenerator:
         return image_bytes
 
     # ------------------------------------------------------------------
-    # Provider 3: gen.pollinations.ai — needs POLLINATIONS_API_KEY, richer models
+    # Provider 4: gen.pollinations.ai — needs POLLINATIONS_API_KEY, richer models
     # ------------------------------------------------------------------
     def _generate_pollinations_gen(self, prompt: str, seed: Optional[int], model: str,
                                    timeout: int) -> bytes:
@@ -168,7 +214,7 @@ class ImageGenerator:
         return response.content
 
     # ------------------------------------------------------------------
-    # Provider 3: Bytez — free-tier keyed fallback (SDXL)
+    # Provider 5: Bytez — free-tier keyed fallback (SDXL)
     # ------------------------------------------------------------------
     def _generate_bytez(self, prompt: str, seed: Optional[int], model: Optional[str],
                         timeout: int) -> bytes:
@@ -207,9 +253,12 @@ class ImageGenerator:
         Each entry: (name, callable(prompt, seed, model, timeout) -> bytes, model or None).
         Providers in failure cooldown are skipped, unless that would leave the chain empty."""
         chain: List[tuple] = []
+        if CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN:
+            # Real SDXL, photorealistic, ~300 free images/day. First choice.
+            chain.append(("cloudflare", self._generate_cloudflare, CLOUDFLARE_IMAGE_MODEL))
         if GEMINI_API_KEY:
-            # Nano Banana models are photorealistic; try current one first,
-            # older as fallback (gemini-2.5-flash-image retires 2026-10-02).
+            # Photorealistic but zero free-tier quota -> usually 429s; the cooldown
+            # logic skips it for the rest of the job after two failures.
             for model in GEMINI_IMAGE_MODELS:
                 chain.append(("gemini", self._generate_gemini, model.strip()))
         # Keyless Pollinations serves "sana" (weak/cartoonish model) but always works.
