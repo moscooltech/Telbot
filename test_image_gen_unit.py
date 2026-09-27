@@ -39,6 +39,26 @@ def fake_response(status=200, body=JPEG_MAGIC + b"x" * 5000):
 
 
 print("== 1. provider chain composition ==")
+print("== 1a. static chain plan (used by /status) ==")
+with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", ""), \
+     mock.patch.object(ig_mod, "CLOUDFLARE_API_TOKEN", ""), \
+     mock.patch.object(ig_mod, "GEMINI_API_KEY", ""), \
+     mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", "k"), \
+     mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""):
+    plan = ImageGenerator._chain_plan()
+    check("plan works without an instance", [c[0] for c in plan] ==
+          ["pollinations-gen", "pollinations-gen", "pollinations-legacy"],
+          str([c[0] for c in plan]))
+with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", ""), \
+     mock.patch.object(ig_mod, "CLOUDFLARE_API_TOKEN", ""), \
+     mock.patch.object(ig_mod, "GEMINI_API_KEY", ""), \
+     mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
+     mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""):
+    plan = ImageGenerator._chain_plan()
+    check("plan falls back to legacy keyless", [c[0] for c in plan] ==
+          ["pollinations-legacy"], str([c[0] for c in plan]))
+
+print("== 1b. provider chain composition ==")
 with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", ""), \
      mock.patch.object(ig_mod, "CLOUDFLARE_API_TOKEN", ""), \
      mock.patch.object(ig_mod, "GEMINI_API_KEY", ""), \

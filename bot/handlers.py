@@ -17,6 +17,10 @@ from utils.telegram_api import TelegramAPI
 
 logger = logging.getLogger(__name__)
 
+# Result of the most recent finished/failed image phase: {"job_id", "summary", "ts"}.
+# Module-level so /status works regardless of which webhook thread ran the job.
+_last_job_summary = None
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command."""
@@ -27,6 +31,36 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Example: `/gen A story about a lost astronaut on a neon planet.`",
         parse_mode="Markdown"
     )
+
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for the /status command: provider plan + last job's image winners."""
+    # Build the provider plan without creating temp dirs (static chain plan).
+    plan = ImageGenerator._chain_plan()
+    plan_lines = []
+    for pos, (name, _fn, model) in enumerate(plan, 1):
+        marker = "🥇" if pos == 1 else f"{pos}."
+        plan_lines.append(f"{marker} `{name}`" + (f" ({model})" if model else ""))
+    plan_text = "\n".join(plan_lines) if plan_lines else "`none configured`"
+
+    lines = ["📊 **Bot Status**", "", "🖼️ **Image provider fallback order:**", plan_text]
+
+    if not any("pollinations-gen" == name for name, _, _ in plan):
+        lines.append("")
+        lines.append("💡 No `POLLINATIONS_API_KEY` set — images fall back to the "
+                     "keyless endpoint (cartoonish model).")
+
+    last = _last_job_summary
+    lines.append("")
+    if last:
+        age = int(time.time() - last["ts"])
+        age_text = f"{age // 60}m ago" if age < 86400 else f"{age // 3600}h ago"
+        lines.append(f"🎞️ **Last job** ({last['job_id']}, {age_text}):")
+        lines.append(f"`{last['summary']}`")
+    else:
+        lines.append("🎞️ No video generated yet in this run — send /generate to make one!")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -173,6 +207,8 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
         # Log + remember which provider won, for the completion message later.
         image_summary = ig.provider_summary_text(len(scenes), len(image_paths))
         logger.info("[Job %s] Image summary: %s", job_id, image_summary)
+        global _last_job_summary
+        _last_job_summary = {"job_id": job_id, "summary": image_summary, "ts": time.time()}
 
         if status_msg_id:
             TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🎙️ **Step 3/5:** Generating AI narration...")

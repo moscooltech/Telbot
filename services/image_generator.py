@@ -249,12 +249,13 @@ class ImageGenerator:
             logger.warning("Provider %s is cooling down for %ss after %s failures.",
                            key, PROVIDER_COOLDOWN_SECONDS, stats["fails"])
 
-    def _provider_chain(self) -> List[tuple]:
-        """Ordered fallback chain: keyed Pollinations Flux first (real, photorealistic Flux
-        when POLLINATIONS_API_KEY exists), then Cloudflare SDXL, then keyless legacy as the
-        always-works safety net, then Bytez.
-        Each entry: (name, callable(prompt, seed, model, timeout) -> bytes, model or None).
-        Providers in failure cooldown are skipped, unless that would leave the chain empty."""
+    @staticmethod
+    def _chain_plan() -> List[tuple]:
+        """The configured provider fallback order, ignoring cooldown state.
+        Used both by generate_image() (filtered + bound by _provider_chain) and by
+        the /status command (shown as-is, no instance needed).
+        Each entry: (name, method_name, model or None) — method_name is resolved to
+        a bound method by _provider_chain so no temp dirs are created for /status."""
         chain: List[tuple] = []
         if POLLINATIONS_API_KEY:
             # Real Flux (photorealistic) on gen.pollinations.ai. Tried before everything
@@ -263,29 +264,35 @@ class ImageGenerator:
             # valid alternatives verified via gen.pollinations.ai/models are "z-image-turbo"
             # (tongyi-mai/z-image-turbo) and "flux-2-pro".
             for model in ("flux", "z-image-turbo"):
-                chain.append(("pollinations-gen", self._generate_pollinations_gen, model))
+                chain.append(("pollinations-gen", "_generate_pollinations_gen", model))
         if CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN:
             # Real SDXL, photorealistic, ~300 free images/day.
-            chain.append(("cloudflare", self._generate_cloudflare, CLOUDFLARE_IMAGE_MODEL))
+            chain.append(("cloudflare", "_generate_cloudflare", CLOUDFLARE_IMAGE_MODEL))
         if GEMINI_API_KEY:
             # Photorealistic but zero free-tier quota -> usually 429s; the cooldown
             # logic skips it for the rest of the job after two failures.
             for model in GEMINI_IMAGE_MODELS:
-                chain.append(("gemini", self._generate_gemini, model.strip()))
+                chain.append(("gemini", "_generate_gemini", model.strip()))
         # Keyless Pollinations serves "sana" (weak/cartoonish model) but always works —
         # kept near the end as the guaranteed safety net.
         chain.append(
-            ("pollinations-legacy", self._generate_pollinations_legacy, IMAGE_LEGACY_MODEL)
+            ("pollinations-legacy", "_generate_pollinations_legacy", IMAGE_LEGACY_MODEL)
         )
         if BYTEZ_API_KEY:
-            chain.append(("bytez", self._generate_bytez, None))
+            chain.append(("bytez", "_generate_bytez", None))
+        return chain
 
+    def _provider_chain(self) -> List[tuple]:
+        """Ordered fallback chain with providers in failure cooldown skipped,
+        unless that would leave the chain empty."""
+        plan = self._chain_plan()
         now = time.time()
         healthy = [
-            entry for entry in chain
+            entry for entry in plan
             if self._provider_stats.get(self._provider_key(entry[0], entry[2]), {}).get("cooldown_until", 0) < now
         ]
-        return healthy or chain  # last-ditch: if everything is cooling down, try everything
+        chosen = healthy or plan  # last-ditch: if everything is cooling down, try everything
+        return [(name, getattr(self, method_name), model) for name, method_name, model in chosen]
 
     def generate_image(self, prompt: str, index: int, retry: int = 2) -> Optional[str]:
         """Generates a single image, trying every provider in the fallback chain."""

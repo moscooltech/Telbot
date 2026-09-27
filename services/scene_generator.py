@@ -5,7 +5,7 @@ import logging
 from config import (
     MIN_SCENES, MAX_SCENES,
     ENABLE_RELEVANCE_CHECK, RELEVANCE_MIN_SCORE, MAX_SCENE_REWRITES,
-    ENABLE_PROMPT_POLISH,
+    ENABLE_PROMPT_POLISH, MIN_CAPTION_CHARS,
 )
 from services.llm_service import LLMService
 
@@ -130,6 +130,38 @@ class SceneGenerator:
             logger.warning("Spine generation failed (%s); falling back to raw prompt as motive.", e)
             return {"motive": prompt, "style_bible": "", "beats": [], "hook": "", "cta": ""}
 
+    @staticmethod
+    def _build_long_caption(caption, spine, topic):
+        """Grow a too-short LLM caption to at least MIN_CAPTION_CHARS by layering in
+        the story spine: hook, CTA, motive and the topic sentence. Deterministic —
+        no extra LLM call, so the caption never blocks the pipeline."""
+        caption = (caption or "").strip()
+        hook = (spine.get("hook") or "").strip()
+        cta = (spine.get("cta") or "").strip()
+        motive = (spine.get("motive") or "").strip()
+        topic = (topic or "").strip()
+
+        # Layered filler: richest first. None may duplicate what's already there.
+        candidates = [hook, cta, motive, topic]
+        for extra in candidates:
+            if len(caption) >= MIN_CAPTION_CHARS:
+                break
+            if extra and extra.lower() not in caption.lower():
+                caption = f"{caption}\n\n{extra}" if caption else extra
+
+        # Still short (weak spine)? Append descriptive boilerplate tied to the topic.
+        if len(caption) < MIN_CAPTION_CHARS:
+            filler = (
+                f"Watch until the end to see the full story of {topic[:80]}. "
+                "Every part of this video — the script, the images, the narration and "
+                "the final edit — was created end to end by an AI pipeline. "
+                "Follow for more stories like this one."
+            )
+            if filler.lower() not in caption.lower():
+                caption = f"{caption}\n\n{filler}" if caption else filler
+
+        return caption.strip()
+
     def _generate_scenes(self, prompt, spine, min_s, max_s):
         """Pass 2: full script where every scene is derived from the spine."""
         beats = "; ".join(f"{i + 1}. {b}" for i, b in enumerate(spine["beats"])) or "n/a"
@@ -148,10 +180,11 @@ class SceneGenerator:
             '- "narration": 20-30 words of natural spoken text, proper grammar/punctuation, no "scene N"/"step N" numbering.\n'
             '- "description": a vivid image-generation prompt. It MUST reuse the same subject/setting/style as the style bible so all scenes look like one video.\n'
             '- "caption": a complete, natural social-media post caption for the finished video: '
-            '2-4 sentences (~150-300 characters) describing what the video shows and why it is '
-            "worth watching. NEVER write placeholders like 'viral hook', 'viral reel' or 'amazing video'.\n\n"
+            f'AT LEAST 200 characters (aim for 250-400) and 3-5 sentences, describing what the video '
+            "shows, one surprising detail, and why it is worth watching. NEVER write placeholders "
+            "like 'viral hook', 'viral reel' or 'amazing video'.\n\n"
             "Output JSON ONLY:\n"
-            '{"scenes": [{"narration": "...", "description": "..."}], "caption": "2-4 sentence post caption about the video", "hashtags": ["tag1", "tag2"]}'
+            '{"scenes": [{"narration": "...", "description": "..."}], "caption": "3-5 sentence post caption of at least 200 characters", "hashtags": ["tag1", "tag2"]}'
         )
         content = self.llm.generate_text(
             system_prompt, f"Topic: {prompt}", temperature=0.7, timeout=90, json_mode=True
@@ -300,12 +333,13 @@ class SceneGenerator:
                         logger.warning("Prompt polish skipped (falling back to raw descriptions): %s", e)
 
                 # Caption: demand a real post caption; if the LLM still returned a
-                # short placeholder, fall back to the richer spine fields.
+                # short placeholder, pad it from the richer spine fields until it
+                # clears MIN_CAPTION_CHARS (never ship a one-liner caption).
                 caption = (data.get("caption") or "").strip()
-                if len(caption) < 40:
-                    hook = (spine.get("hook") or "").strip()
-                    cta = (spine.get("cta") or "").strip()
-                    caption = "\n\n".join(x for x in (hook, cta) if x).strip() or spine["motive"]
+                if len(caption) < MIN_CAPTION_CHARS:
+                    caption = self._build_long_caption(caption, spine, prompt)
+                    logger.info("Caption was short (%s chars); padded to %s chars.",
+                                len((data.get("caption") or "").strip()), len(caption))
 
                 metadata = {
                     "caption": caption,

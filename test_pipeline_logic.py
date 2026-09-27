@@ -150,6 +150,45 @@ check("two word boundaries captured", len(words_out) == 2, str(words_out))
 check("tick->sec conversion", abs(words_out[0]["start"] - 1.0) < 0.01 and abs(words_out[0]["end"] - 1.3) < 0.01, str(words_out[0]))
 check("second word timing", abs(words_out[1]["start"] - 0.45) < 0.01 or abs(words_out[1]["start"] - 4.5) < 0.01, str(words_out[1]))
 
+print("== 6. caption length enforcement ==")
+from services.scene_generator import SceneGenerator
+
+spine = {
+    "motive": "Show how deep-sea creatures survive crushing pressure",
+    "style_bible": "cinematic underwater photography",
+    "hook": "Three kilometers down, the pressure would crush a car in seconds.",
+    "cta": "Follow for more ocean mysteries.",
+}
+
+# Empty LLM caption -> hook + cta + motive must clear the 200-char minimum
+grown = SceneGenerator._build_long_caption("", spine, "deep sea creatures")
+check("empty caption grows past minimum", len(grown) >= config.MIN_CAPTION_CHARS,
+      f"len={len(grown)}")
+check("grown caption includes hook", "crush a car" in grown, grown[:80])
+check("grown caption includes cta", "Follow for more" in grown, grown[-80:])
+
+# Short placeholder caption -> padded, original text kept
+padded = SceneGenerator._build_long_caption("So cool!", spine, "deep sea creatures")
+check("short caption padded", len(padded) >= config.MIN_CAPTION_CHARS, f"len={len(padded)}")
+check("original text preserved", padded.startswith("So cool!"), padded[:20])
+
+# Already-long caption -> returned untouched
+long_caption = ("This video dives into the abyssal zone where sunlight never reaches, "
+                "revealing bioluminescent hunters and creatures that look alien to us. "
+                "Scientists keep finding new species here every single year, which makes "
+                "you wonder what else is hiding in the dark. Watch until the end!")
+check("long caption untouched", len(long_caption) >= config.MIN_CAPTION_CHARS)
+check("long caption unchanged", SceneGenerator._build_long_caption(long_caption, spine, "x") == long_caption)
+
+# Weak spine (empty fields) + empty caption -> boilerplate filler saves it
+weak = SceneGenerator._build_long_caption("", {"motive": "", "hook": "", "cta": ""}, "the topic")
+check("weak spine still reaches minimum", len(weak) >= config.MIN_CAPTION_CHARS,
+      f"len={len(weak)}")
+
+# Duplicates never appended
+no_dup = SceneGenerator._build_long_caption(spine["hook"], spine, "deep sea creatures")
+check("no duplicate hook", no_dup.count(spine["hook"]) == 1, no_dup[:120])
+
 print("")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

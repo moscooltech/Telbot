@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 from config import TELEGRAM_TOKEN
-from bot.handlers import start, generate, handle_callback
+from bot.handlers import start, generate, status, handle_callback
 
 # Configure logging
 logging.basicConfig(
@@ -28,6 +28,7 @@ bot_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
 # Add handlers
 bot_app.add_handler(CommandHandler("start", start))
+bot_app.add_handler(CommandHandler("status", status))
 bot_app.add_handler(CommandHandler(["generate", "gen"], generate))
 bot_app.add_handler(CallbackQueryHandler(handle_callback))
 

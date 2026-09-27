@@ -2,7 +2,7 @@ import asyncio
 import logging
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 from config import TELEGRAM_TOKEN
-from bot.handlers import start, generate, handle_callback
+from bot.handlers import start, generate, status, handle_callback
 
 # Configure logging
 logging.basicConfig(
@@ -24,6 +24,7 @@ async def main():
 
     # Add handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler(["generate", "gen"], generate))
     app.add_handler(CallbackQueryHandler(handle_callback))
 

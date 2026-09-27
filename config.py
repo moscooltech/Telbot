@@ -95,6 +95,11 @@ ENABLE_RELEVANCE_CHECK = True
 RELEVANCE_MIN_SCORE = 7             # scenes scoring below this get one rewrite against the motive
 MAX_SCENE_REWRITES = 4              # cap rewrites per video to bound latency
 
+# Social caption: Telegram/TikTok posts under ~200 chars look like placeholders.
+# The LLM is instructed to write longer captions; anything shorter is padded from
+# the story spine (hook + CTA + motive) and, if still short, the topic sentence.
+MIN_CAPTION_CHARS = int(os.getenv("MIN_CAPTION_CHARS", "200"))
+
 # FFmpeg Optimization for Free Tier
 FFMPEG_PRESET = "veryfast"          # 40% faster encoding
 FFMPEG_CRF = 22                     # Quality (0-51, 22 is good)
