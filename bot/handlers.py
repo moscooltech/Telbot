@@ -170,6 +170,10 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                     text=f"⚠️ {failed_scenes} scene(s) failed — continuing with {len(image_paths)}."
                 )
 
+        # Log + remember which provider won, for the completion message later.
+        image_summary = ig.provider_summary_text(len(scenes), len(image_paths))
+        logger.info("[Job %s] Image summary: %s", job_id, image_summary)
+
         if status_msg_id:
             TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🎙️ **Step 3/5:** Generating AI narration...")
 
@@ -336,8 +340,18 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             caption=f"{caption}\n\n{hashtags}"
         )
 
+        # Turn the status message into a completion summary (winner + failed scenes)
+        # instead of deleting it, so the provider choice is visible without Render logs.
         if result and status_msg_id:
-            TelegramAPI.delete_message(chat_id, status_msg_id)
+            done_lines = [f"✅ **Video ready!**"]
+            done_lines.append(f"🖼️ {image_summary}")
+            if failed_scenes:
+                done_lines.append(f"⚠️ {failed_scenes} scene(s) skipped (image failures).")
+            TelegramAPI.edit_message(
+                chat_id=chat_id,
+                message_id=status_msg_id,
+                text="\n".join(done_lines)
+            )
 
         logger.info(f"✨ Job {job_id} finished successfully!")
 

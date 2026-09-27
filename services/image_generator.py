@@ -325,17 +325,23 @@ class ImageGenerator:
         logger.error("[Scene %s] Image generation failed. Last error: %s", index, last_error)
         return None
 
+    def provider_summary_text(self, total: int, ok: int) -> str:
+        """Compact winner line, e.g. "10/10 scenes OK | winners: pollinations-gen (flux) x10".
+        Shown in Render logs and in the Telegram completion message."""
+        if not self.provider_usage:
+            return f"{ok}/{total} scenes OK | no provider delivered an image"
+        parts = [f"{name} x{count}" for name, count in
+                 sorted(self.provider_usage.items(), key=lambda kv: -kv[1])]
+        return f"{ok}/{total} scenes OK | winners: " + ", ".join(parts)
+
     def _log_provider_summary(self, total: int, ok: int) -> None:
         """One-line job summary of which provider/model actually produced the images,
         so the winning provider is obvious in Render logs."""
+        summary = self.provider_summary_text(total, ok)
         if not self.provider_usage:
-            logger.warning("[Job %s] Image summary: 0/%s scenes succeeded; no provider "
-                           "delivered an image.", self.job_id, total)
-            return
-        parts = [f"{name} x{count}" for name, count in
-                 sorted(self.provider_usage.items(), key=lambda kv: -kv[1])]
-        logger.info("[Job %s] Image summary: %s/%s scenes OK | winners: %s",
-                    self.job_id, ok, total, ", ".join(parts))
+            logger.warning("[Job %s] Image summary: %s", self.job_id, summary)
+        else:
+            logger.info("[Job %s] Image summary: %s", self.job_id, summary)
 
     def generate_all_images(self, scenes: List[str]) -> List[str]:
         """Generates images for all scenes with fallback logic."""
