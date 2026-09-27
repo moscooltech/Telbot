@@ -248,27 +248,33 @@ class ImageGenerator:
                            key, PROVIDER_COOLDOWN_SECONDS, stats["fails"])
 
     def _provider_chain(self) -> List[tuple]:
-        """Ordered fallback chain: photorealistic Gemini first (when a key exists),
-        then keyless Pollinations, then keyed Pollinations and Bytez.
+        """Ordered fallback chain: keyed Pollinations Flux first (real, photorealistic Flux
+        when POLLINATIONS_API_KEY exists), then Cloudflare SDXL, then keyless legacy as the
+        always-works safety net, then Bytez.
         Each entry: (name, callable(prompt, seed, model, timeout) -> bytes, model or None).
         Providers in failure cooldown are skipped, unless that would leave the chain empty."""
         chain: List[tuple] = []
+        if POLLINATIONS_API_KEY:
+            # Real Flux (photorealistic) on gen.pollinations.ai. Tried before everything
+            # else when the key exists; free-tier limits (402) fall through automatically.
+            # NOTE: "turbo" is a stale alias on this endpoint (400 Invalid model); the
+            # valid alternatives verified via gen.pollinations.ai/models are "z-image-turbo"
+            # (tongyi-mai/z-image-turbo) and "flux-2-pro".
+            for model in ("flux", "z-image-turbo"):
+                chain.append(("pollinations-gen", self._generate_pollinations_gen, model))
         if CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN:
-            # Real SDXL, photorealistic, ~300 free images/day. First choice.
+            # Real SDXL, photorealistic, ~300 free images/day.
             chain.append(("cloudflare", self._generate_cloudflare, CLOUDFLARE_IMAGE_MODEL))
         if GEMINI_API_KEY:
             # Photorealistic but zero free-tier quota -> usually 429s; the cooldown
             # logic skips it for the rest of the job after two failures.
             for model in GEMINI_IMAGE_MODELS:
                 chain.append(("gemini", self._generate_gemini, model.strip()))
-        # Keyless Pollinations serves "sana" (weak/cartoonish model) but always works.
+        # Keyless Pollinations serves "sana" (weak/cartoonish model) but always works —
+        # kept near the end as the guaranteed safety net.
         chain.append(
             ("pollinations-legacy", self._generate_pollinations_legacy, IMAGE_LEGACY_MODEL)
         )
-        if POLLINATIONS_API_KEY:
-            # Order matters: retry with a fresh generation when one fails; models listed first win.
-            for model in ("flux", "turbo"):
-                chain.append(("pollinations-gen", self._generate_pollinations_gen, model))
         if BYTEZ_API_KEY:
             chain.append(("bytez", self._generate_bytez, None))
 

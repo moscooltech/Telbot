@@ -4,7 +4,7 @@ from config import TEMP_DIR
 from services.image_generator import ImageGenerator
 
 def test_image_generation():
-    print("🎨 Testing image generation fallback chain (keyless Pollinations legacy first)...")
+    print("🎨 Testing image generation fallback chain (keyed Flux first when key present)...")
 
     test_job_id = "test_image_gen"
     test_dir = os.path.join(TEMP_DIR, test_job_id)

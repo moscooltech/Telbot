@@ -78,11 +78,13 @@ with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", ""), \
      mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""):
     gen = make_gen()
     chain = gen._provider_chain()
-    check("pollinations key adds gen models", [c[0] for c in chain] ==
-          ["pollinations-legacy", "pollinations-gen", "pollinations-gen"],
+    check("pollinations key puts real Flux first", [c[0] for c in chain] ==
+          ["pollinations-gen", "pollinations-gen", "pollinations-legacy"],
           str([c[0] for c in chain]))
-    check("gen models are flux then turbo", [c[2] for c in chain][1:] == ["flux", "turbo"],
-          str([c[2] for c in chain]))
+    check("gen models are flux then z-image-turbo", [c[2] for c in chain][:2] ==
+          ["flux", "z-image-turbo"], str([c[2] for c in chain]))
+    check("keyless legacy is the safety net", chain[-1][0] == "pollinations-legacy",
+          str([c[0] for c in chain]))
 
 with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", ""), \
      mock.patch.object(ig_mod, "CLOUDFLARE_API_TOKEN", ""), \
@@ -129,11 +131,11 @@ with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", ""), \
     # Cool down the remaining gen providers too -> last-ditch: full chain comes back
     gen._mark_provider_failure(gen._provider_key("pollinations-gen", "flux"))
     gen._mark_provider_failure(gen._provider_key("pollinations-gen", "flux"))
-    gen._mark_provider_failure(gen._provider_key("pollinations-gen", "turbo"))
-    gen._mark_provider_failure(gen._provider_key("pollinations-gen", "turbo"))
+    gen._mark_provider_failure(gen._provider_key("pollinations-gen", "z-image-turbo"))
+    gen._mark_provider_failure(gen._provider_key("pollinations-gen", "z-image-turbo"))
     full = gen._provider_chain()
     check("last-ditch returns full chain when ALL providers cool down",
-          len(full) == 3 and full[0][0] == "pollinations-legacy", str([c[0] for c in full]))
+          len(full) == 3 and full[0][0] == "pollinations-gen", str([c[0] for c in full]))
 
     # Success resets stats
     gen._provider_stats = {}

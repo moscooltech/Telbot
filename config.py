@@ -22,10 +22,13 @@ GEMINI_IMAGE_ASPECT = os.getenv("GEMINI_IMAGE_ASPECT", "9:16")
 
 # Cloudflare Workers AI - real SDXL on a generous free tier:
 # 10,000 Neurons/day free, ~30 Neurons per 576x1024 image => ~300 photorealistic images/day.
+# Optional: with POLLINATIONS_API_KEY set, keyed Pollinations Flux is tried first.
 # Setup (both values come from a FREE Cloudflare account):
 #   Account ID: dash.cloudflare.com -> Workers & Pages -> right sidebar "Account ID"
-#   API Token:  dash.cloudflare.com/profile/api-tokens -> Create Token ->
-#               template "Run Cloudflare Workers AI models"
+#   API Token:  dash.cloudflare.com -> Workers AI -> "Use REST API" ->
+#               "Create a Workers AI token" (easiest; skips the policy-selection screen)
+#               or dash.cloudflare.com/profile/api-tokens -> Create custom token ->
+#               single permission: Account > Workers AI > Edit
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
 CLOUDFLARE_IMAGE_MODEL = os.getenv(
@@ -55,8 +58,14 @@ MUSIC_DIR = "assets/music"
 FONTS_DIR = "assets/fonts"
 
 # Image Generation - OPTIMIZED FOR 512MB RAM
-# gen.pollinations.ai now requires an API key (and dropped "flux-dev"); the legacy
-# image.pollinations.ai/prompt endpoint is still free & keyless (verified 2026-09-26).
+# Provider order (services/image_generator.py::_provider_chain):
+#   1. pollinations-gen  "flux" then "z-image-turbo"  (real photorealistic Flux; needs POLLINATIONS_API_KEY)
+#   2. cloudflare SDXL   (needs CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN)
+#   3. gemini Nano Banana (zero free-tier image quota; usually 429s)
+#   4. pollinations-legacy  keyless, always works, but serves the weak cartoonish "sana" model
+#   5. bytez SDXL        (needs BYTEZ_API_KEY)
+# gen.pollinations.ai requires an API key; the legacy image.pollinations.ai/prompt
+# endpoint is free & keyless (verified 2026-09-26).
 IMAGE_WIDTH = 720      # Reduced from 1080 (saves 33% memory)
 IMAGE_HEIGHT = 1280    # Reduced from 1920 (saves 33% memory)
 IMAGE_LEGACY_MODEL = "flux"           # model hint on the keyless legacy endpoint
