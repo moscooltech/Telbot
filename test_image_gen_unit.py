@@ -3,6 +3,7 @@ Offline unit tests for the ImageGenerator fallback chain (no network, no API key
 Run: python test_image_gen_unit.py
 """
 import os
+import logging
 import shutil
 from unittest import mock
 
@@ -153,6 +154,8 @@ with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
         check("file starts with jpeg magic", open(path, "rb").read(3) == JPEG_MAGIC)
     built = gen._build_prompt("a fox, running, forest")
     check("style bible fused", "watercolor style" in built, built)
+    check("winning provider recorded", gen.provider_usage ==
+          {f"pollinations-legacy ({config.IMAGE_LEGACY_MODEL})": 1}, str(gen.provider_usage))
 
 print("== 5. generate_image when every provider fails ==")
 with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
@@ -162,6 +165,48 @@ with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
     gen = make_gen()
     path = gen.generate_image("a fox in a forest", 1)
     check("returns None when all providers fail", path is None, str(path))
+    check("no usage recorded on failure", gen.provider_usage == {}, str(gen.provider_usage))
+
+print("== 6. job summary logging ==")
+with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
+     mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""), \
+     mock.patch.object(ig_mod.time, "sleep", lambda s: None), \
+     mock.patch.object(ig_mod.requests, "get", return_value=fake_response()):
+    gen = make_gen()
+    paths = gen.generate_all_images(["a fox in a forest", "a city at night"])
+    check("all scenes generated", len(paths) == 2, str(paths))
+    check("usage counts both scenes", gen.provider_usage ==
+          {f"pollinations-legacy ({config.IMAGE_LEGACY_MODEL})": 2}, str(gen.provider_usage))
+    captured = []
+    handler = logging.Handler()
+    handler.emit = lambda record: captured.append(record.getMessage())
+    old_level = ig_mod.logger.level
+    ig_mod.logger.setLevel(logging.INFO)
+    ig_mod.logger.addHandler(handler)
+    try:
+        gen._log_provider_summary(2, 2)
+    finally:
+        ig_mod.logger.removeHandler(handler)
+        ig_mod.logger.setLevel(old_level)
+    summary = " ".join(captured)
+    check("summary names winner and counts",
+          f"winners: pollinations-legacy ({config.IMAGE_LEGACY_MODEL}) x2" in summary,
+          summary)
+
+empty_gen = make_gen()
+captured_empty = []
+handler_empty = logging.Handler()
+handler_empty.emit = lambda record: captured_empty.append(record.getMessage())
+old_level_empty = ig_mod.logger.level
+ig_mod.logger.setLevel(logging.INFO)
+ig_mod.logger.addHandler(handler_empty)
+try:
+    empty_gen._log_provider_summary(3, 0)
+finally:
+    ig_mod.logger.removeHandler(handler_empty)
+    ig_mod.logger.setLevel(old_level_empty)
+check("empty summary warns when nothing succeeded",
+      any("no provider" in msg for msg in captured_empty), str(captured_empty))
 
 shutil.rmtree(os.path.join(TEMP_DIR, JOB), ignore_errors=True)
 

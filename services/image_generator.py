@@ -41,6 +41,8 @@ class ImageGenerator:
         self.base_seed = random.randint(0, 999999) if CONSISTENT_SEED else None
         # key -> {"fails": int, "cooldown_until": epoch seconds}
         self._provider_stats = {}
+        # "name (model)" -> how many final images this provider actually delivered
+        self.provider_usage = {}
 
         os.makedirs(self.image_dir, exist_ok=True)
 
@@ -309,8 +311,10 @@ class ImageGenerator:
                     with open(filepath, "wb") as f:
                         f.write(image_bytes)
                     self._provider_stats[key] = {"fails": 0, "cooldown_until": 0.0}
-                    logger.info("[Scene %s] Success with %s (%s) attempt %s!",
-                                index, provider_name, model, attempt)
+                    usage_key = f"{provider_name} ({model})" if model else provider_name
+                    self.provider_usage[usage_key] = self.provider_usage.get(usage_key, 0) + 1
+                    logger.info("[Scene %s] Success with %s (%s) attempt %s -> %s!",
+                                index, provider_name, model, attempt, filepath)
                     return filepath
                 except Exception as e:
                     last_error = f"{provider_name}: {e}"
@@ -321,6 +325,18 @@ class ImageGenerator:
         logger.error("[Scene %s] Image generation failed. Last error: %s", index, last_error)
         return None
 
+    def _log_provider_summary(self, total: int, ok: int) -> None:
+        """One-line job summary of which provider/model actually produced the images,
+        so the winning provider is obvious in Render logs."""
+        if not self.provider_usage:
+            logger.warning("[Job %s] Image summary: 0/%s scenes succeeded; no provider "
+                           "delivered an image.", self.job_id, total)
+            return
+        parts = [f"{name} x{count}" for name, count in
+                 sorted(self.provider_usage.items(), key=lambda kv: -kv[1])]
+        logger.info("[Job %s] Image summary: %s/%s scenes OK | winners: %s",
+                    self.job_id, ok, total, ", ".join(parts))
+
     def generate_all_images(self, scenes: List[str]) -> List[str]:
         """Generates images for all scenes with fallback logic."""
         logger.info("Starting generation for %s scenes...", len(scenes))
@@ -330,6 +346,8 @@ class ImageGenerator:
             path = self.generate_image(scene, i)
             if path:
                 image_paths.append(path)
+
+        self._log_provider_summary(len(scenes), len(image_paths))
 
         if not image_paths:
             raise Exception("All image generation attempts failed.")
