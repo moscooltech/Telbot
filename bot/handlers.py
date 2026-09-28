@@ -1,4 +1,5 @@
 import os
+import asyncio
 import threading
 import time
 import shutil
@@ -21,6 +22,17 @@ logger = logging.getLogger(__name__)
 # Module-level so /status works regardless of which webhook thread ran the job.
 _last_job_summary = None
 
+# Provider plan captured when /testimage was sent (button index -> plan entry).
+_testimage_plan = []
+
+# Fixed photorealistic test prompt: concrete topic objects (meter, AC unit),
+# so the test also shows whether a provider renders scenes or just faces.
+_TESTIMAGE_PROMPT = (
+    "a technician in work clothes inspecting a residential electricity meter box, "
+    "air conditioning unit humming on the wall behind, holding a paper utility bill, "
+    "outdoor wall, medium shot, natural daylight"
+)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command."""
@@ -28,7 +40,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 Hello {user_name}! I am your AI Video Creator.\n\n"
         "Send /generate (or /gen) followed by a story prompt to create a viral video.\n\n"
-        "Example: `/gen A story about a lost astronaut on a neon planet.`",
+        "Example: `/gen A story about a lost astronaut on a neon planet.`\n\n"
+        "Other commands:\n"
+        "• /testimage — generate one test image with a provider you pick\n"
+        "• /status — provider fallback order + last job summary",
         parse_mode="Markdown"
     )
 
@@ -61,6 +76,102 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("🎞️ No video generated yet in this run — send /generate to make one!")
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def testimage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /testimage: generate ONE image with a provider you pick."""
+    global _testimage_plan
+    plan = ImageGenerator._chain_plan()
+    if not plan:
+        await update.message.reply_text(
+            "❌ No image providers configured. Add `CLOUDFLARE_ACCOUNT_ID` + "
+            "`CLOUDFLARE_API_TOKEN` (recommended) or any other image key.",
+            parse_mode="Markdown",
+        )
+        return
+    _testimage_plan = plan
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    rows = []
+    for idx, (name, _fn, model) in enumerate(plan):
+        label = f"{idx + 1}. {name}" + (f" ({model})" if model else "")
+        rows.append([InlineKeyboardButton(label[:64], callback_data=f"ti_{idx}")])
+
+    msg = (
+        "🧪 **Image Provider Test**\n\n"
+        "Pick a provider from the fallback order. It generates ONE image with this prompt:\n"
+        f"`{_TESTIMAGE_PROMPT}`\n\n"
+        "The photo is sent back here so you can judge quality and topic accuracy "
+        "before running a full video."
+    )
+    await update.message.reply_text(
+        msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+
+async def _run_testimage(query, data: str):
+    """Generate one test image with the provider picked from the /testimage menu."""
+    global _testimage_plan
+    try:
+        idx = int(data.replace("ti_", ""))
+    except ValueError:
+        idx = -1
+    if not (0 <= idx < len(_testimage_plan)):
+        await query.edit_message_text("❌ Test menu expired — send /testimage again.")
+        return
+
+    name, _fn, model = _testimage_plan[idx]
+    label = name + (f" ({model})" if model else "")
+    chat_id = query.message.chat_id
+    await query.edit_message_text(f"🧪 Testing **{label}**... (can take up to a minute)")
+
+    result = {"path": None, "summary": "", "error": "", "log": ""}
+    records = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    def _worker():
+        ig_logger = logging.getLogger("services.image_generator")
+        capture = _Capture(level=logging.INFO)
+        old_level = ig_logger.level
+        ig_logger.addHandler(capture)
+        ig_logger.setLevel(logging.INFO)
+        try:
+            ig = ImageGenerator(f"testimage_{int(time.time())}")
+            path = ig.generate_image(_TESTIMAGE_PROMPT, 0)
+            result["path"] = path
+            result["summary"] = ig.provider_summary_text(1, 1 if path else 0)
+        except Exception as e:
+            result["error"] = str(e)
+        finally:
+            ig_logger.removeHandler(capture)
+            ig_logger.setLevel(old_level)
+
+    await asyncio.to_thread(_worker)
+
+    # Surface the provider's own failure line(s) so the reason is visible in chat.
+    failures = [r for r in records if "failed" in r.lower()]
+    result["log"] = failures[-1] if failures else (records[-1] if records else "")
+
+    if result["path"]:
+        sent = TelegramAPI.send_photo(
+            chat_id=chat_id,
+            photo_path=result["path"],
+            caption=f"🧪 **{label}**\n{result['summary']}",
+        )
+        if sent:
+            await query.edit_message_text(f"✅ Test complete — **{label}** (photo above ☝️)")
+        else:
+            await query.edit_message_text(
+                f"⚠️ **{label}** produced an image but the upload failed — check the Render logs."
+            )
+    else:
+        err = (result["error"] or result["log"] or "provider returned no image")[:300]
+        await query.edit_message_text(
+            f"❌ **{label}** failed:\n`{err}`\n\nSend /testimage to try another provider."
+        )
 
 
 async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -413,6 +524,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     chat_id = query.message.chat_id
     message_id = query.message.message_id
+
+    if data.startswith("ti_"):
+        await _run_testimage(query, data)
+        return
 
     if data.startswith("proceed_"):
         job_id = data.replace("proceed_", "")

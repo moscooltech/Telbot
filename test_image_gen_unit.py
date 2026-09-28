@@ -284,6 +284,38 @@ with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
           f"winners: pollinations-legacy ({config.IMAGE_LEGACY_MODEL}) x2" in summary,
           summary)
 
+print("== 7. klein multi-reference anchor ==")
+with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
+     mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""), \
+     mock.patch.object(ig_mod.time, "sleep", lambda s: None), \
+     mock.patch.object(ig_mod.requests, "get", return_value=fake_response()):
+    gen = make_gen()
+    check("anchor unset before first image", gen.anchor_image_path is None, str(gen.anchor_image_path))
+    gen.generate_image("a fox in a forest", 0)
+    expected_anchor = os.path.join(TEMP_DIR, JOB, "images", "scene_000.jpg")
+    check("anchor set to first successful image",
+          gen.anchor_image_path == expected_anchor, str(gen.anchor_image_path))
+
+    klein_model = config.CLOUDFLARE_KLEIN_MODELS[0]
+    with mock.patch.object(ig_mod.requests, "post", return_value=cf_json_response()) as post_mock:
+        gen._generate_cloudflare("the same fox", 1, klein_model, 30)
+        check("klein request includes anchor as input_image_0",
+              "files" in post_mock.call_args.kwargs
+              and "input_image_0" in post_mock.call_args.kwargs["files"],
+              str(list(post_mock.call_args.kwargs)))
+
+    gen.anchor_image_path = None
+    with mock.patch.object(ig_mod.requests, "post", return_value=cf_json_response()) as post_mock:
+        gen._generate_cloudflare("the same fox", 2, klein_model, 30)
+        check("no anchor -> plain multipart klein request",
+              "files" not in post_mock.call_args.kwargs, str(list(post_mock.call_args.kwargs)))
+
+    gen.anchor_image_path = "/nonexistent/anchor.jpg"
+    with mock.patch.object(ig_mod.requests, "post", return_value=cf_json_response()) as post_mock:
+        gen._generate_cloudflare("the same fox", 3, klein_model, 30)
+        check("missing anchor file is ignored safely",
+              "files" not in post_mock.call_args.kwargs, str(list(post_mock.call_args.kwargs)))
+
 empty_gen = make_gen()
 captured_empty = []
 handler_empty = logging.Handler()

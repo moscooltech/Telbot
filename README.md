@@ -8,7 +8,7 @@ A fully automated Telegram bot that transforms a text prompt into a viral-ready 
 
 1. **Script (2-pass, aligned)** — the LLM first writes a *story spine* (motive, style bible, beats, hook, CTA), then writes every scene **from that spine** so scenes never drift off-topic. A cheap reviewer pass scores each scene 1–10 against the motive and auto-rewrites weak ones.
 2. **Approval** — you get a script preview with ✅ Proceed / 🔄 Regenerate buttons.
-3. **Images** — priority fallback chain: **Cloudflare Workers AI first when credentials are set** (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, free): FLUX.2 klein 4B (photorealistic, best prompt adherence) → SDXL → keyed Pollinations (real Flux; needs `POLLINATIONS_API_KEY`) → Gemini Nano Banana (paid only — zero free-tier image quota) → keyless Pollinations (always works, but weak cartoonish "sana" model — last-resort safety net) → Bytez. Photorealism is enforced with a negative prompt (no cartoon/anime/illustration) and a photo-style suffix on every prompt. With the **style bible + one consistent seed per job** so all scenes look like one video.
+3. **Images** — priority fallback chain: **Cloudflare Workers AI first when credentials are set** (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, free): FLUX.2 klein 4B (photorealistic, best prompt adherence) → SDXL → keyed Pollinations (real Flux; needs `POLLINATIONS_API_KEY`) → Gemini Nano Banana (paid only — zero free-tier image quota) → keyless Pollinations (always works, but weak cartoonish "sana" model — last-resort safety net) → Bytez. Photorealism is enforced with a negative prompt (no cartoon/anime/illustration) and a photo-style suffix on every prompt. With the **style bible + one consistent seed per job** so all scenes look like one video. The **first image generated also becomes the klein multi-reference anchor**: it is sent as `input_image_0` on every later klein request so the main character/look stays consistent across scenes.
 4. **Voice** — edge-tts (`en-US-AndrewMultilingualNeural` by default, configurable via `TTS_VOICE`/`TTS_RATE`), with loudness normalization (-14 LUFS) and gTTS fallback. **Real word-level timings** are captured from the TTS engine.
 5. **Video** — per-scene clips with **TikTok-style karaoke subtitles**: words appear in 2–3 word chunks and the current word highlights **in perfect sync with the voice** (timings come from the TTS engine itself, not estimates). Bold font, safe-zone positioning, static-subtitle fallback if libass ever fails.
 6. **Assembly** — stream-copy concat (≈0 RAM) + audio mux, uploaded to Telegram with caption + hashtags.
@@ -50,6 +50,16 @@ Local development alternative: `python main.py` (polling mode — no webhook nee
 - `--format description` → on-screen scene descriptions, no voiceover
 
 Wait 2–4 minutes on the free tier. You get a 9:16 MP4 with burned-in karaoke subtitles plus a ready-to-paste caption and hashtags.
+
+### Phase 4: More Commands
+
+```
+/status     — show the image provider fallback order + last job's winner
+/testimage  — generate ONE image with a provider you pick from buttons,
+              then send it back so you can judge quality before a full video
+```
+
+`/testimage` is the fastest way to compare providers (e.g. Cloudflare FLUX.2 klein vs. the keyless fallback) without spending a whole video generation on it.
 
 ## 🛠️ Technical Notes
 

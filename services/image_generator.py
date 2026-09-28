@@ -46,6 +46,9 @@ class ImageGenerator:
         self.provider_usage = {}
 
         os.makedirs(self.image_dir, exist_ok=True)
+        # Path of the first image generated this job. Sent as the klein
+        # multi-reference input so later scenes keep the same character/look.
+        self.anchor_image_path: Optional[str] = None
 
     def _clean_prompt(self, prompt: str) -> str:
         """Sanitize prompt: strip quotes/newlines, collapse whitespace, cap length.
@@ -115,7 +118,17 @@ class ImageGenerator:
                 # Not an official klein parameter; harmless as a hint unless the
                 # API starts rejecting unknown fields (then set IMAGE_NEGATIVE_PROMPT="")
                 data["negative_prompt"] = IMAGE_NEGATIVE_PROMPT
-            response = requests.post(url, data=data, headers=headers, timeout=timeout)
+            # Multi-reference consistency: the first image of the job is sent as
+            # input_image_0 so every later scene keeps the same character/look
+            # ("klein supports up to 4 reference images", max 512x512 each).
+            if self.anchor_image_path and os.path.exists(self.anchor_image_path):
+                with open(self.anchor_image_path, "rb") as ref_file:
+                    response = requests.post(
+                        url, data=data, headers=headers, timeout=timeout,
+                        files={"input_image_0": ref_file},
+                    )
+            else:
+                response = requests.post(url, data=data, headers=headers, timeout=timeout)
         else:
             # SDXL / other JSON-input models.
             payload = {
@@ -353,6 +366,9 @@ class ImageGenerator:
                     with open(filepath, "wb") as f:
                         f.write(image_bytes)
                     self._provider_stats[key] = {"fails": 0, "cooldown_until": 0.0}
+                    if self.anchor_image_path is None:
+                        # First success becomes the klein multi-reference anchor.
+                        self.anchor_image_path = filepath
                     usage_key = f"{provider_name} ({model})" if model else provider_name
                     self.provider_usage[usage_key] = self.provider_usage.get(usage_key, 0) + 1
                     logger.info("[Scene %s] Success with %s (%s) attempt %s -> %s!",

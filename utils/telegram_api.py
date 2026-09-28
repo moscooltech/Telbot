@@ -71,6 +71,28 @@ class TelegramAPI:
             return None
 
     @classmethod
+    def send_photo(cls, chat_id, photo_path, caption="", parse_mode="Markdown"):
+        url = f"{cls.BASE_URL}/sendPhoto"
+        try:
+            if not os.path.exists(photo_path):
+                logger.error(f"Photo file does not exist: {photo_path}")
+                return None
+
+            with open(photo_path, "rb") as photo_file:
+                files = {"photo": photo_file}
+                data = {
+                    "chat_id": chat_id,
+                    "caption": caption[:1024],
+                    "parse_mode": parse_mode,
+                }
+                response = requests.post(url, data=data, files=files, timeout=60)
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.error(f"Error sending manual photo: {e}")
+            return None
+
+    @classmethod
     def delete_message(cls, chat_id, message_id):
         url = f"{cls.BASE_URL}/deleteMessage"
         payload = {
