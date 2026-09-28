@@ -12,7 +12,8 @@ from config import (
     BYTEZ_IMAGE_MODEL, IMAGE_LEGACY_MODEL, IMAGE_TIMEOUT,
     GEMINI_API_KEY, GEMINI_IMAGE_MODELS, GEMINI_IMAGE_ASPECT,
     CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, CLOUDFLARE_IMAGE_MODEL,
-    IMAGE_NEGATIVE_PROMPT,
+    CLOUDFLARE_KLEIN_MODELS, IMAGE_NEGATIVE_PROMPT, IMAGE_STYLE_SUFFIX,
+    ENABLE_STYLE_SUFFIX,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,10 @@ class ImageGenerator:
         if self.style_bible:
             style_words = self._clean_prompt(self.style_bible)
             prompt = f"{prompt}, {style_words}"
+        # The photo-style suffix is appended AFTER word capping so it is never
+        # truncated away — it is what keeps generic models from drifting cartoonish.
+        if ENABLE_STYLE_SUFFIX and IMAGE_STYLE_SUFFIX:
+            prompt = f"{prompt}, {self._clean_prompt(IMAGE_STYLE_SUFFIX)}"
         return f"{prompt}, high quality, detailed, professional, 4k"
 
     @staticmethod
@@ -76,29 +81,54 @@ class ImageGenerator:
         return content[:3] == JPEG_MAGIC or content[:8] == PNG_MAGIC[:8]
 
     # ------------------------------------------------------------------
-    # Provider 1: Cloudflare Workers AI — REAL SDXL on a generous free tier
-    # (10,000 Neurons/day ≈ 300 images). Needs a free Cloudflare API token.
-    # Native width/height support -> true 9:16 output, plus negative prompts.
+    # Provider 1: Cloudflare Workers AI — photorealistic models on a generous
+    # free tier (10,000 Neurons/day). FLUX.2 klein (newest, best prompt
+    # adherence, multipart input) first, then SDXL as JSON fallback.
+    # Native width/height support -> true 9:16 output.
     # ------------------------------------------------------------------
+    @staticmethod
+    def _is_klein(model: str) -> bool:
+        """FLUX.2 klein models use a different API: multipart form data, guidance
+        instead of num_steps, and a 256-1920 size range (no negative prompt field)."""
+        return model in CLOUDFLARE_KLEIN_MODELS or "/flux-2" in model
+
     def _generate_cloudflare(self, prompt: str, seed: Optional[int], model: str,
                              timeout: int) -> bytes:
         url = (f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}"
                f"/ai/run/{model}")
-        payload = {
-            "prompt": prompt[:2048],
-            "width": self.width,
-            "height": self.height,
-            "num_steps": 12,
-            "negative_prompt": IMAGE_NEGATIVE_PROMPT,
-        }
-        if seed is not None:
-            payload["seed"] = seed
+        headers = {"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}"}
 
-        response = requests.post(
-            url, json=payload,
-            headers={"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}"},
-            timeout=timeout,
-        )
+        if self._is_klein(model):
+            # FLUX.2 klein requires multipart form data (documented in the Workers AI
+            # changelog). Output comes back as JSON {"image": "<base64>"}.
+            # width/height are clamped to the documented 256-1920 range.
+            width = max(256, min(1920, self.width))
+            height = max(256, min(1920, self.height))
+            data = {
+                "prompt": prompt[:2048],
+                "width": str(width),
+                "height": str(height),
+            }
+            if seed is not None:
+                data["seed"] = str(seed)
+            if IMAGE_NEGATIVE_PROMPT:
+                # Not an official klein parameter; harmless as a hint unless the
+                # API starts rejecting unknown fields (then set IMAGE_NEGATIVE_PROMPT="")
+                data["negative_prompt"] = IMAGE_NEGATIVE_PROMPT
+            response = requests.post(url, data=data, headers=headers, timeout=timeout)
+        else:
+            # SDXL / other JSON-input models.
+            payload = {
+                "prompt": prompt[:2048],
+                "width": self.width,
+                "height": self.height,
+                "num_steps": 12,
+                "negative_prompt": IMAGE_NEGATIVE_PROMPT,
+            }
+            if seed is not None:
+                payload["seed"] = seed
+            response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+
         if response.status_code != 200:
             raise Exception(f"cloudflare returned {response.status_code}: {response.text[:200]}")
 
@@ -257,17 +287,22 @@ class ImageGenerator:
         Each entry: (name, method_name, model or None) — method_name is resolved to
         a bound method by _provider_chain so no temp dirs are created for /status."""
         chain: List[tuple] = []
+        if CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN:
+            # Cloudflare FIRST when credentials exist: confirmed working in
+            # production, free tier (~300 images/day), and the FLUX.2 klein
+            # models beat everything else here on photorealism. Chain klein
+            # (multipart input) then SDXL (JSON) as in-family fallbacks.
+            for klein in CLOUDFLARE_KLEIN_MODELS:
+                chain.append(("cloudflare", "_generate_cloudflare", klein))
+            chain.append(("cloudflare", "_generate_cloudflare", CLOUDFLARE_IMAGE_MODEL))
         if POLLINATIONS_API_KEY:
-            # Real Flux (photorealistic) on gen.pollinations.ai. Tried before everything
-            # else when the key exists; free-tier limits (402) fall through automatically.
+            # Keyed Pollinations Flux — solid photorealistic backup. Free-tier
+            # limits (402) fall through automatically.
             # NOTE: "turbo" is a stale alias on this endpoint (400 Invalid model); the
             # valid alternatives verified via gen.pollinations.ai/models are "z-image-turbo"
             # (tongyi-mai/z-image-turbo) and "flux-2-pro".
             for model in ("flux", "z-image-turbo"):
                 chain.append(("pollinations-gen", "_generate_pollinations_gen", model))
-        if CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN:
-            # Real SDXL, photorealistic, ~300 free images/day.
-            chain.append(("cloudflare", "_generate_cloudflare", CLOUDFLARE_IMAGE_MODEL))
         if GEMINI_API_KEY:
             # Photorealistic but zero free-tier quota -> usually 429s; the cooldown
             # logic skips it for the rest of the job after two failures.

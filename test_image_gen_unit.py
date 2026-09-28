@@ -78,7 +78,18 @@ with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", "acc"), \
     chain = gen._provider_chain()
     check("cloudflare first when key set", [c[0] for c in chain][0] == "cloudflare",
           str([c[0] for c in chain]))
-    check("cloudflare model is sdxl", "stable-diffusion-xl" in chain[0][2], chain[0][2])
+    check("klein models lead the cloudflare chain",
+          [c[2] for c in chain][:len(config.CLOUDFLARE_KLEIN_MODELS)]
+          == config.CLOUDFLARE_KLEIN_MODELS, str([c[2] for c in chain]))
+    check("sdxl trails klein as json fallback",
+          chain[len(config.CLOUDFLARE_KLEIN_MODELS)][2] == config.CLOUDFLARE_IMAGE_MODEL,
+          str([c[2] for c in chain]))
+    check("klein detection works",
+          all(ImageGenerator._is_klein(m) for m in config.CLOUDFLARE_KLEIN_MODELS)
+          and not ImageGenerator._is_klein(config.CLOUDFLARE_IMAGE_MODEL),
+          str(config.CLOUDFLARE_KLEIN_MODELS))
+
+CF_ENTRIES = len(config.CLOUDFLARE_KLEIN_MODELS) + 1  # klein models + SDXL fallback
 
 with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", "acc"), \
      mock.patch.object(ig_mod, "CLOUDFLARE_API_TOKEN", "tok"), \
@@ -88,8 +99,10 @@ with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", "acc"), \
     gen = make_gen()
     chain = gen._provider_chain()
     check("gemini after cloudflare, before legacy",
-          [c[0] for c in chain][:2] == ["cloudflare", "gemini"], str([c[0] for c in chain]))
-    check("gemini models from config", [c[2] for c in chain][1:1+len(config.GEMINI_IMAGE_MODELS)]
+          [c[0] for c in chain][:CF_ENTRIES + 1] == ["cloudflare"] * CF_ENTRIES + ["gemini"],
+          str([c[0] for c in chain]))
+    check("gemini models from config",
+          [c[2] for c in chain][CF_ENTRIES:CF_ENTRIES + len(config.GEMINI_IMAGE_MODELS)]
           == [m.strip() for m in config.GEMINI_IMAGE_MODELS], str([c[2] for c in chain]))
 
 with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", ""), \
@@ -99,11 +112,25 @@ with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", ""), \
      mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""):
     gen = make_gen()
     chain = gen._provider_chain()
-    check("pollinations key puts real Flux first", [c[0] for c in chain] ==
+    check("pollinations key chain without cloudflare creds", [c[0] for c in chain] ==
           ["pollinations-gen", "pollinations-gen", "pollinations-legacy"],
           str([c[0] for c in chain]))
-    check("gen models are flux then z-image-turbo", [c[2] for c in chain][:2] ==
-          ["flux", "z-image-turbo"], str([c[2] for c in chain]))
+
+with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", "acc"), \
+     mock.patch.object(ig_mod, "CLOUDFLARE_API_TOKEN", "tok"), \
+     mock.patch.object(ig_mod, "GEMINI_API_KEY", ""), \
+     mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", "k"), \
+     mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""):
+    gen = make_gen()
+    chain = gen._provider_chain()
+    cf_count = len(config.CLOUDFLARE_KLEIN_MODELS) + 1
+    check("cloudflare leads even with pollinations key",
+          [c[0] for c in chain][:cf_count] == ["cloudflare"] * cf_count, str([c[0] for c in chain]))
+    check("keyed pollinations backs up cloudflare",
+          [c[0] for c in chain][cf_count:cf_count + 2] == ["pollinations-gen"] * 2,
+          str([c[0] for c in chain]))
+    check("gen models are flux then z-image-turbo after cloudflare",
+          [c[2] for c in chain][2:4] == ["flux", "z-image-turbo"], str([c[2] for c in chain]))
     check("keyless legacy is the safety net", chain[-1][0] == "pollinations-legacy",
           str([c[0] for c in chain]))
 
@@ -125,6 +152,50 @@ check("tiny body rejected",
       not ImageGenerator._is_image(fake_response(body=JPEG_MAGIC + b"x" * 100)))
 check("html error page rejected",
       not ImageGenerator._is_image(fake_response(body=b"<html>error</html>")))
+
+
+def cf_json_response(b64_img=None, status=200):
+    import base64 as b64mod
+    if b64_img is None:
+        b64_img = b64mod.b64encode(JPEG_MAGIC + b"x" * 5000).decode()
+    resp = mock.Mock()
+    resp.status_code = status
+    resp.headers = {"Content-Type": "application/json"}
+    resp.json = lambda: {"success": True, "result": {"image": b64_img}}
+    return resp
+
+
+print("== 2b. cloudflare request shapes ==")
+img_b64 = __import__("base64").b64encode(JPEG_MAGIC + b"x" * 5000).decode()
+with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", "acc"), \
+     mock.patch.object(ig_mod, "CLOUDFLARE_API_TOKEN", "tok"), \
+     mock.patch.object(ig_mod.requests, "post", return_value=cf_json_response()) as post_mock:
+    gen = make_gen()
+    klein_model = config.CLOUDFLARE_KLEIN_MODELS[0]
+    out = gen._generate_cloudflare("a smart meter on a wall", 42, klein_model, 30)
+    check("klein returns decoded image", out[:3] == JPEG_MAGIC, str(out[:10]))
+    kwargs = post_mock.call_args.kwargs
+    check("klein uses multipart form data (data=, not json=)",
+          "data" in kwargs and "json" not in kwargs, str(list(kwargs)))
+    form = kwargs.get("data", {})
+    check("klein sends clamped width/height",
+          form.get("width") == str(gen.width) and form.get("height") == str(gen.height), str(form))
+    check("klein sends seed", form.get("seed") == "42", str(form))
+    with mock.patch.object(ig_mod, "IMAGE_WIDTH", 2560), \
+         mock.patch.object(gen, "width", 2560):
+        gen._generate_cloudflare("x", None, klein_model, 30)
+        clamped = post_mock.call_args.kwargs["data"]["width"]
+        check("klein clamps width to 1920", clamped == "1920", clamped)
+
+with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", "acc"), \
+     mock.patch.object(ig_mod, "CLOUDFLARE_API_TOKEN", "tok"), \
+     mock.patch.object(ig_mod.requests, "post", return_value=cf_json_response()) as post_mock:
+    gen = make_gen()
+    gen._generate_cloudflare("a fox", 7, config.CLOUDFLARE_IMAGE_MODEL, 30)
+    payload = post_mock.call_args.kwargs.get("json", {})
+    check("sdxl uses json payload with steps + negative prompt",
+          payload.get("num_steps") == 12 and payload.get("negative_prompt")
+          and payload.get("seed") == 7, str(payload))
 
 print("== 3. failure cooldown ==")
 with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", ""), \

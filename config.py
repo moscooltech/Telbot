@@ -31,13 +31,34 @@ GEMINI_IMAGE_ASPECT = os.getenv("GEMINI_IMAGE_ASPECT", "9:16")
 #               single permission: Account > Workers AI > Edit
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
+# FLUX.2 klein models (4B distilled, fixed 4-step, multipart form input, JSON out
+# with base64 image). Better photorealism + prompt adherence than SDXL; both are
+# free-tier. Configurable via env (comma-separated). SDXL stays the JSON fallback.
+CLOUDFLARE_KLEIN_MODELS = [
+    m.strip() for m in os.getenv(
+        "CLOUDFLARE_KLEIN_MODELS",
+        "@cf/black-forest-labs/flux-2-klein-4b"
+    ).split(",") if m.strip()
+]
 CLOUDFLARE_IMAGE_MODEL = os.getenv(
     "CLOUDFLARE_IMAGE_MODEL", "@cf/stabilityai/stable-diffusion-xl-base-1.0"
 )
-# Conservative negative prompt (style bible still controls the artistic style)
+# Photorealism controls. Negative prompt steers ALL providers away from the
+# plastic/cartoon AI look. (Cloudflare FLUX.2 klein has no native negative-prompt
+# field; for it this is sent as a best-effort hint — set IMAGE_NEGATIVE_PROMPT=""
+# if the API ever rejects unknown multipart fields.)
 IMAGE_NEGATIVE_PROMPT = os.getenv(
     "IMAGE_NEGATIVE_PROMPT",
-    "low quality, blurry, deformed, extra fingers, watermark, text, logo, oversaturated",
+    "low quality, blurry, deformed, extra fingers, watermark, text, logo, "
+    "oversaturated, cartoon, anime, 3d render, cgi, illustration, painting, "
+    "drawing, plastic skin, waxy skin, smooth airbrushed skin, doll, toy",
+)
+# Photo-style suffix appended to every image prompt (bends generic models toward
+# real-looking photos instead of the default cartoon/illustration drift).
+IMAGE_STYLE_SUFFIX = os.getenv(
+    "IMAGE_STYLE_SUFFIX",
+    "photorealistic, candid documentary photograph, natural skin texture, "
+    "realistic lighting, shot on dslr, 35mm, shallow depth of field",
 )
 
 # Default Models (verified September 2026)
@@ -59,8 +80,8 @@ FONTS_DIR = "assets/fonts"
 
 # Image Generation - OPTIMIZED FOR 512MB RAM
 # Provider order (services/image_generator.py::_provider_chain):
-#   1. pollinations-gen  "flux" then "z-image-turbo"  (real photorealistic Flux; needs POLLINATIONS_API_KEY)
-#   2. cloudflare SDXL   (needs CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN)
+#   1. cloudflare FLUX.2 klein 4B then SDXL (needs CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN; confirmed working)
+#   2. pollinations-gen  "flux" then "z-image-turbo"  (keyed photorealistic Flux backup; needs POLLINATIONS_API_KEY)
 #   3. gemini Nano Banana (zero free-tier image quota; usually 429s)
 #   4. pollinations-legacy  keyless, always works, but serves the weak cartoonish "sana" model
 #   5. bytez SDXL        (needs BYTEZ_API_KEY)
@@ -76,6 +97,9 @@ IMAGE_PROMPT_MAX_WORDS = 60           # commas structure image prompts; 20 words
 
 # Prompt engineering pass: rewrite scene descriptions into structured image prompts
 ENABLE_PROMPT_POLISH = True
+
+# Inject IMAGE_STYLE_SUFFIX into every prompt sent to image providers
+ENABLE_STYLE_SUFFIX = os.getenv("ENABLE_STYLE_SUFFIX", "true").lower() == "true"
 
 # Pollinations server-side prompt rewriting (rewrites curated prompts -> usually off)
 POLLINATIONS_ENHANCE = False

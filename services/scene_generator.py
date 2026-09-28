@@ -107,7 +107,7 @@ class SceneGenerator:
             "Return JSON ONLY:\n"
             "{\n"
             '  "motive": "one sentence: the core message/purpose of the video",\n'
-            '  "style_bible": "one line: recurring visual identity (main subject/character, setting, art style, lighting, color palette) shared by ALL scenes",\n'
+            '  "style_bible": "one line: recurring visual identity (main subject/character, setting, art style, lighting, color palette) shared by ALL scenes. Prefer a photorealistic documentary/photo style unless the topic clearly needs otherwise",\n'
             '  "beats": ["beat 1 summary", "beat 2 summary", "beat 3 summary", "beat 4 summary"],\n'
             '  "hook": "opening hook concept",\n'
             '  "cta": "closing call-to-action concept"\n'
@@ -252,7 +252,8 @@ class SceneGenerator:
             "1. One line, comma-separated layers in this order: main subject with concrete details, action/pose, setting/environment, camera shot (e.g. close-up, wide establishing shot, low angle), lighting, art style/mood.\n"
             "2. Reuse the same main character/subject description across ALL scenes so they look like the same video.\n"
             "3. Visual, concrete language only: no abstract ideas, no text/words/numbers/logos in the image, no narration, no 'scene N'.\n"
-            "4. 25-45 words. No quotes. No trailing period.\n\n"
+            "4. 25-45 words. No quotes. No trailing period.\n"
+            "5. Every prompt must VISUALIZE the topic, not just show a generic person: include the concrete objects, machinery, data displays or environments the scene is actually about (e.g. for an electricity bill topic: smart meter, AC unit, glowing watt meter, utility bill, power lines, wiring, appliance energy use). A person may appear only while interacting with those objects.\n\n"
             "Scene descriptions:\n"
             + "\n".join(f"{i + 1}. {s.get('description', '')}" for i, s in enumerate(scenes)) + "\n\n"
             'Output JSON ONLY: {"prompts": ["prompt 1", "prompt 2", ...]} — one polished prompt per scene, same order.'
