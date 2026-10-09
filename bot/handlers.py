@@ -6,15 +6,20 @@ import shutil
 import logging
 import gc
 import json
+import re
 from telegram import Update
 from telegram.ext import ContextTypes
-from services.scene_generator import SceneGenerator
+from services.scene_generator import SceneGenerator, extract_json
 from services.image_generator import ImageGenerator
 from services.audio_processor import AudioProcessor
 from services.video_processor import VideoProcessor
-from config import TEMP_DIR, MUSIC_DIR, VIDEO_DURATION_PER_SCENE
+from config import TEMP_DIR, MUSIC_DIR, VIDEO_DURATION_PER_SCENE, SERIES_FILE
 import config
 from utils.telegram_api import TelegramAPI
+from bot import series_runner
+from bot.series_runner import is_busy as _job_slot_busy, set_busy as _set_job_busy
+from services.series_manager import SeriesManager
+from services.series_scheduler import start_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +48,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Example: `/gen A story about a lost astronaut on a neon planet.`\n\n"
         "Other commands:\n"
         "• /testimage — generate one test image with a provider you pick\n"
-        "• /status — provider fallback order + last job summary",
+        "• /status — provider fallback order + last job summary\n\n"
+        "📺 **Content series** (queue + auto-schedule): /series",
         parse_mode="Markdown"
     )
 
@@ -255,16 +261,31 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error generating script: {str(e)}")
 
 
-def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_format):
+def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_format, series_ctx=None):
     """
     Synchronous background function that uses pre-approved scenes and narrations.
     Uses TelegramAPI for manual communication.
+
+    When series_ctx is set (automated series run), progress messages get a
+    "🎬 Series run k/n:" prefix and success/failure update the series file
+    (success advances next_run; failure re-inserts the prompt at the head).
     """
     logger.info(f"📥 Processing job {job_id} in background thread with format {video_format}...")
 
+    # Claim the single global job slot (no-op if the series runner already did).
+    _set_job_busy(True)
+    _run_prefix = ""
+    if series_ctx:
+        _run_prefix = "🎬 Series run %s/%s: " % (series_ctx.get("k", "?"), series_ctx.get("n", "?"))
+
+    def _status_text(text):
+        """Prefix progress/completion messages with the series run label
+        ("🎬 Series run k/n:"). No-op for regular /generate jobs."""
+        return _run_prefix + text if _run_prefix else text
+
     status_data = TelegramAPI.send_message(
         chat_id=chat_id,
-        text="🖼️ **Step 1/5:** Creating high-quality images..."
+        text=_status_text("🖼️ **Step 1/5:** Creating high-quality images...")
     )
     status_msg_id = status_data.get("message_id") if status_data else None
 
@@ -276,7 +297,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             TelegramAPI.edit_message(
                 chat_id=chat_id,
                 message_id=status_msg_id,
-                text=f"🖼️ **Step 2/5:** Generated {len(scenes)} scenes.\nCreating high-quality images..."
+                text=_status_text(f"🖼️ **Step 2/5:** Generated {len(scenes)} scenes.\nCreating high-quality images...")
             )
 
         # --- PHASE 2: IMAGES (with job-wide style bible for visual coherence) ---
@@ -294,7 +315,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 TelegramAPI.edit_message(
                     chat_id=chat_id,
                     message_id=status_msg_id,
-                    text=f"🖼️ **Step 2/5:** Creating images... ({i + 1}/{len(scenes)})"
+                    text=_status_text(f"🖼️ **Step 2/5:** Creating images... ({i + 1}/{len(scenes)})")
                 )
 
         # Degrade gracefully: a job can lose some scenes and still ship a good video.
@@ -312,7 +333,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 TelegramAPI.edit_message(
                     chat_id=chat_id,
                     message_id=status_msg_id,
-                    text=f"⚠️ {failed_scenes} scene(s) failed — continuing with {len(image_paths)}."
+                    text=_status_text(f"⚠️ {failed_scenes} scene(s) failed — continuing with {len(image_paths)}.")
                 )
 
         # Log + remember which provider won, for the completion message later.
@@ -322,7 +343,8 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
         _last_job_summary = {"job_id": job_id, "summary": image_summary, "ts": time.time()}
 
         if status_msg_id:
-            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🎙️ **Step 3/5:** Generating AI narration...")
+            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id,
+                                    text=_status_text("🎙️ **Step 3/5:** Generating AI narration..."))
 
         # --- PHASE 3: AUDIO (captures real word timings from TTS) ---
         ap = AudioProcessor(job_id)
@@ -368,7 +390,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                     TelegramAPI.edit_message(
                         chat_id=chat_id,
                         message_id=status_msg_id,
-                        text=f"🎙️ **Step 3/5:** Generating AI narration... ({i+1}/{num_narrations})"
+                        text=_status_text(f"🎙️ **Step 3/5:** Generating AI narration... ({i+1}/{num_narrations})")
                     )
                 path, dur, timings = ap.generate_single_narration(narration_text, i)
                 if path:
@@ -391,7 +413,8 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 bg_music = musics[0]
 
         if status_msg_id:
-            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🎵 **Step 3/5:** Finalizing audio mix...")
+            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id,
+                                    text=_status_text("🎵 **Step 3/5:** Finalizing audio mix..."))
 
         # --- PHASE 3b: AUDIO MERGE WITH ERROR HANDLING ---
         try:
@@ -412,7 +435,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 TelegramAPI.edit_message(
                     chat_id=chat_id,
                     message_id=status_msg_id,
-                    text=f"❌ **Step 3 Failed:** Audio processing error\n\n`{str(e)[:100]}`"
+                    text=_status_text(f"❌ **Step 3 Failed:** Audio processing error\n\n`{str(e)[:100]}`")
                 )
             raise Exception(f"Step 3 (Audio Merge) failed: {e}")
 
@@ -457,7 +480,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 TelegramAPI.edit_message(
                     chat_id=chat_id,
                     message_id=status_msg_id,
-                    text=f"🎬 **Step 4/5:** Rendering scene {i+1}/{num_clips}\n📝 \"{text_preview}\""
+                    text=_status_text(f"🎬 **Step 4/5:** Rendering scene {i+1}/{num_clips}\n📝 \"{text_preview}\"")
                 )
             clip = vp.create_scene_video(
                 img_path, dur, i, scene_text,
@@ -467,7 +490,8 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             clip_paths.append(clip)
 
         if status_msg_id:
-            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="🏗️ **Step 4/5:** Finalizing video assembly (this may take a minute)...")
+            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id,
+                                    text=_status_text("🏗️ **Step 4/5:** Finalizing video assembly (this may take a minute)..."))
 
         # Free up memory before heavy FFmpeg render
         gc.collect()
@@ -476,7 +500,8 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
 
         # --- PHASE 5: UPLOAD ---
         if status_msg_id:
-            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id, text="✅ **Step 5/5:** Uploading to Telegram...")
+            TelegramAPI.edit_message(chat_id=chat_id, message_id=status_msg_id,
+                                    text=_status_text("✅ **Step 5/5:** Uploading to Telegram..."))
 
         caption = metadata.get("caption", "AI Generated Video")
         hashtags = metadata.get("hashtags", "#ai #video")
@@ -490,7 +515,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
         # Turn the status message into a completion summary (winner + failed scenes)
         # instead of deleting it, so the provider choice is visible without Render logs.
         if result and status_msg_id:
-            done_lines = [f"✅ **Video ready!**"]
+            done_lines = [_status_text("✅ **Video ready!**")]
             done_lines.append(f"🖼️ {image_summary}")
             if failed_scenes:
                 done_lines.append(f"⚠️ {failed_scenes} scene(s) skipped (image failures).")
@@ -501,18 +526,24 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             )
 
         logger.info(f"✨ Job {job_id} finished successfully!")
+        if series_ctx:
+            series_runner.on_series_success(series_ctx)
 
     except Exception as e:
         logger.error(f"❌ Job {job_id} failed: {e}", exc_info=True)
-        TelegramAPI.send_message(
-            chat_id=chat_id,
-            text=f"❌ **Generation failed:** {str(e)}\nPlease try again."
-        )
+        if series_ctx:
+            series_runner.on_series_failure(series_ctx, e)
+        else:
+            TelegramAPI.send_message(
+                chat_id=chat_id,
+                text=f"❌ **Generation failed:** {str(e)}\nPlease try again."
+            )
     finally:
         # Clean up temp files
         job_dir = os.path.join(TEMP_DIR, job_id)
         if os.path.exists(job_dir):
             shutil.rmtree(job_dir)
+        _set_job_busy(False)
         logger.info(f"🧹 Cleaned up job: {job_id}")
 
 
@@ -527,6 +558,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("ti_"):
         await _run_testimage(query, data)
+        return
+
+    if data.startswith("sc_"):
+        await _handle_series_callback(query, data)
         return
 
     if data.startswith("proceed_"):
@@ -597,3 +632,381 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             except Exception as e:
                 await query.edit_message_text(f"❌ Regeneration failed: {str(e)}")
+
+
+# ===========================================================================
+# Content Series commands (/series ...) - see series-unorouter-spec.md
+# ===========================================================================
+
+_SERIES_HELP = (
+    "📺 **Content Series** — queue prompts and auto-generate videos on a schedule.\n\n"
+    "• `/series create <title>` — start a new series\n"
+    "• `/series add <prompt text>` — add prompt(s); one per line for multiple\n"
+    "• `/series generate <N> <brief>` — AI expands the brief into N prompts\n"
+    "• `/series list` — show every queued prompt\n"
+    "• `/series schedule <hours>` — auto-generate every N hours\n"
+    "• `/series schedule <hours> at HH:MM` — anchor runs to a wall-clock time\n"
+    "• `/series pause` / `/series resume`\n"
+    "• `/series run` — generate the next prompt now\n"
+    "• `/series status` — schedule summary\n"
+    "• `/series clear` — delete the series"
+)
+
+# Callback scratchpad for the /series generate preview (single-user bot).
+_series_generated = {"prompts": [], "fmt": "narration"}
+
+
+def _parse_series_args(args):
+    """Split context.args into (subcommand, rest_tokens, fmt)."""
+    sub = args[0].lower() if args else ""
+    fmt = "narration"
+    rest = []
+    i = 1
+    while i < len(args):
+        if args[i] == "--format" and i + 1 < len(args):
+            if args[i + 1].lower() in ("narration", "description"):
+                fmt = args[i + 1].lower()
+                i += 2
+                continue
+        rest.append(args[i])
+        i += 1
+    return sub, rest, fmt
+
+
+def _series_add_payload(raw_text):
+    """Re-extract the /series add argument block from the RAW message text.
+
+    context.args is built with .split(), which collapses newlines — that would
+    destroy the one-prompt-per-line multi-add. The raw message text keeps them.
+    Also strips a leading/trailing '--format narration|description' flag.
+    Returns (payload, fmt)."""
+    tokens = raw_text.split(None, 1)
+    # Drop the command word; if the next word is the 'add' subcommand, drop it too
+    # (so line 1 of a multi-line payload is a real prompt, not the literal 'add').
+    tail = tokens[1] if len(tokens) > 1 else ""
+    sub_tokens = tail.split(None, 1)
+    if sub_tokens and sub_tokens[0].lower() == "add":
+        tail = sub_tokens[1] if len(sub_tokens) > 1 else ""
+    raw = tail
+    fmt = "narration"
+    m = re.search(r"(?:^|\s)--format\s+(narration|description)(?=\s|$)", raw)
+    if m:
+        fmt = m.group(1)
+        raw = raw[:m.start()] + " " + raw[m.end():]
+    return raw.strip(), fmt
+
+
+async def series_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Single dispatcher for all /series subcommands."""
+    args = context.args or []
+    sub, rest, fmt = _parse_series_args(args)
+    manager = SeriesManager()
+    data = manager.load()
+
+    if sub == "" or sub == "help":
+        await update.message.reply_text(_SERIES_HELP, parse_mode="Markdown")
+        return
+
+    # --- create -----------------------------------------------------------
+    if sub == "create":
+        title = " ".join(rest).strip()
+        if not title:
+            await update.message.reply_text("Usage: `/series create <title>`", parse_mode="Markdown")
+            return
+        if data:
+            # Replace only after confirmation (inline button).
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            kb = [[
+                InlineKeyboardButton("⚠️ Replace series", callback_data="sc_replace_create"),
+                InlineKeyboardButton("❌ Cancel", callback_data="sc_cancel"),
+            ]]
+            _series_generated["new_title"] = title
+            await update.message.reply_text(
+                "⚠️ An active series already exists: **%s** (%d prompts).\nReplace it with **%s**?"
+                % (data["title"], len(data["prompts"]), title),
+                parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb),
+            )
+            return
+        data = manager.create(title, update.effective_chat.id)
+        await update.message.reply_text(
+            "✅ Series **%s** created (0 prompts).\nAdd prompts with `/series add <text>` "
+            "or `/series generate <N> <brief>`, then set a schedule with `/series schedule <hours>`."
+            % title, parse_mode="Markdown")
+        return
+
+    # All other subcommands require an existing series.
+    if not data:
+        await update.message.reply_text(
+            "No active series. Create one first: `/series create <title>`", parse_mode="Markdown")
+        return
+
+    # --- add --------------------------------------------------------------
+    if sub == "add":
+        # Raw message text (not context.args): preserves newlines for
+        # one-prompt-per-line multi-adds. --format is parsed here instead.
+        raw, fmt = _series_add_payload(getattr(update.effective_message, "text", "") or "")
+        if not raw:
+            await update.message.reply_text(
+                "Usage: `/series add <prompt text>` — multi-line text adds one prompt per line.",
+                parse_mode="Markdown")
+            return
+        # Auto-detect multi-line: one prompt per line (blank lines skipped).
+        lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
+        added, skipped = 0, 0
+        for ln in lines:
+            ok, reason = manager.add_prompt(data, ln, fmt)
+            if ok:
+                added += 1
+            else:
+                skipped += 1
+        if added:
+            manager.save(data)
+        msg = "✅ Added %d prompt(s) (%d/%d queued)." % (
+            added, len(data["prompts"]), config.SERIES_MAX_PROMPTS)
+        if skipped:
+            msg += "\n⚠️ %d skipped — queue is full (cap %d)." % (skipped, config.SERIES_MAX_PROMPTS)
+        await update.message.reply_text(msg)
+        return
+
+    # --- generate ----------------------------------------------------------
+    if sub == "generate":
+        if not rest or not rest[0].isdigit():
+            await update.message.reply_text(
+                "Usage: `/series generate <N> <brief>` (N = 1-%d)" % config.SERIES_MAX_PROMPTS_PER_GENERATE,
+                parse_mode="Markdown")
+            return
+        n = int(rest[0])
+        if not 1 <= n <= config.SERIES_MAX_PROMPTS_PER_GENERATE:
+            await update.message.reply_text(
+                "N must be between 1 and %d." % config.SERIES_MAX_PROMPTS_PER_GENERATE)
+            return
+        brief = " ".join(rest[1:]).strip()
+        if not brief:
+            await update.message.reply_text(
+                "Usage: `/series generate <N> <brief>` — e.g. `/series generate 10 electricity bill hacks`",
+                parse_mode="Markdown")
+            return
+        room = config.SERIES_MAX_PROMPTS - len(data["prompts"])
+        if room <= 0:
+            await update.message.reply_text(
+                "⚠️ Queue is full (%d/%d). Remove prompts or /series clear first."
+                % (len(data["prompts"]), config.SERIES_MAX_PROMPTS))
+            return
+        n = min(n, room)
+
+        await update.message.reply_text("🧠 Generating %d prompts for **%s**..." % (n, data["title"]),
+                                        parse_mode="Markdown")
+        try:
+            sg = SceneGenerator()
+            system_prompt = (
+                "You are a content strategist planning a video series.\n"
+                "Series title: %s\n"
+                "Brief: %s\n\n"
+                "Write %d DISTINCT video prompts (ideas) for this series. Each prompt is one\n"
+                "concrete, self-contained video idea that fits the series title and builds on the brief.\n"
+                "Number them implicitly by list order. No numbering inside the text.\n"
+                "Output JSON ONLY: {\"prompts\": [\"prompt 1\", \"prompt 2\", ...]} — exactly %d strings."
+                % (data["title"], brief, n, n)
+            )
+            content = sg.llm.generate_text(system_prompt, "Generate the prompts.", temperature=0.8,
+                                           timeout=90, json_mode=True)
+            generated = extract_json(content).get("prompts", [])
+            generated = [g.strip() for g in generated if isinstance(g, str) and g.strip()][:n]
+            if len(generated) < n:
+                raise Exception("LLM returned only %d/%d usable prompts." % (len(generated), n))
+        except Exception as e:
+            await update.message.reply_text("❌ Prompt generation failed: %s" % str(e)[:200])
+            return
+
+        _series_generated["prompts"] = generated
+        _series_generated["fmt"] = fmt
+        preview = "📝 **%d generated prompts** (series: %s):\n\n" % (len(generated), data["title"])
+        preview += "\n".join("%d. %s" % (i + 1, g[:90]) for i, g in enumerate(generated))
+        preview += "\n\nAdd all of these to the queue?"
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        kb = [[
+            InlineKeyboardButton("✅ Add all", callback_data="sc_add_generated"),
+            InlineKeyboardButton("❌ Discard", callback_data="sc_cancel"),
+        ]]
+        await update.message.reply_text(preview, parse_mode="Markdown",
+                                        reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    # --- list ---------------------------------------------------------------
+    if sub == "list":
+        await update.message.reply_text(manager.queue_text(data), parse_mode="Markdown")
+        return
+
+    # --- status -------------------------------------------------------------
+    if sub == "status":
+        await update.message.reply_text(manager.summary_text(data), parse_mode="Markdown")
+        return
+
+    # --- schedule -------------------------------------------------------------
+    if sub == "schedule":
+        if not rest or not rest[0].isdigit():
+            await update.message.reply_text(
+                "Usage: `/series schedule <hours>` or `/series schedule <hours> at HH:MM`\n"
+                "Example: `/series schedule 24 at 09:00` (timezone: %s)"
+                % config.SERIES_TIMEZONE, parse_mode="Markdown")
+            return
+        hours = int(rest[0])
+        if not 1 <= hours <= 168:
+            await update.message.reply_text("Hours must be between 1 and 168.")
+            return
+        anchor = None
+        if len(rest) >= 3 and rest[1].lower() == "at":
+            anchor = rest[2].strip()
+            if not re.match(r"^\d{1,2}:\d{2}$", anchor):
+                await update.message.reply_text(
+                    "Time must be HH:MM (24h), e.g. `at 09:00`.", parse_mode="Markdown")
+                return
+        sched = manager.set_schedule(data, interval_hours=hours, anchor=anchor, enabled=True)
+        manager.save(data)
+
+        # Ask: run the next prompt right now, or wait for the first slot?
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        kb = [[
+            InlineKeyboardButton("▶️ Generate next prompt now", callback_data="sc_run_now"),
+            InlineKeyboardButton("⏰ Wait for first slot", callback_data="sc_wait_slot"),
+        ]]
+        anchor_txt = (" at " + sched["anchor"]) if sched.get("anchor") else ""
+        await update.message.reply_text(
+            "⏰ Schedule set: every %dh%s (timezone %s).\nNext run: %s\n\nGenerate the next prompt now?"
+            % (hours, anchor_txt, config.SERIES_TIMEZONE, manager.format_next_run(data)),
+            parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    # --- pause / resume -------------------------------------------------------
+    if sub == "pause":
+        manager.pause(data)
+        manager.save(data)
+        await update.message.reply_text("⏸ Series paused. Next run will fire immediately on resume if overdue.")
+        return
+
+    if sub == "resume":
+        manager.resume(data)
+        manager.save(data)
+        await update.message.reply_text(
+            "▶️ Series resumed.\nNext run: %s" % manager.format_next_run(data), parse_mode="Markdown")
+        return
+
+    # --- run (generate next prompt NOW) -----------------------------------------
+    if sub == "run":
+        if _job_slot_busy():
+            await update.message.reply_text("⏳ A video is already generating — try again when it finishes.")
+            return
+        prompt = manager.pop_next(data)
+        if prompt is None:
+            await update.message.reply_text("📭 No pending prompts in the queue.")
+            return
+        manager.mark_run_started(data)
+        manager.save(data)
+        await update.message.reply_text("🚀 Starting series run for `%s`..." % prompt["id"],
+                                        parse_mode="Markdown")
+        k, n = manager.run_position(data)
+        series_runner.launch_series_run(manager, data, prompt, k=k, n=n)
+        return
+
+    # --- clear --------------------------------------------------------------------
+    if sub == "clear":
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        kb = [[
+            InlineKeyboardButton("🗑 Delete everything", callback_data="sc_confirm_clear"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sc_cancel"),
+        ]]
+        await update.message.reply_text(
+            "⚠️ Delete series **%s** (%d prompts, schedule included)? This cannot be undone."
+            % (data["title"], len(data["prompts"])),
+            parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    await update.message.reply_text("Unknown subcommand `%s`.\n\n%s" % (sub, _SERIES_HELP),
+                                    parse_mode="Markdown")
+
+
+async def _handle_series_callback(query, data_str: str):
+    """Inline button callbacks for the /series command (sc_* prefix)."""
+    manager = SeriesManager()
+    action = data_str.replace("sc_", "")
+
+    if action == "cancel":
+        _series_generated["prompts"] = []
+        await query.edit_message_text("Cancelled.")
+        return
+
+    if action == "confirm_clear":
+        data = manager.load()
+        if data:
+            title = data["title"]
+            try:
+                os.remove(SERIES_FILE)
+            except OSError:
+                pass
+            await query.edit_message_text("🗑 Series **%s** deleted." % title, parse_mode="Markdown")
+        else:
+            await query.edit_message_text("Nothing to delete.")
+        return
+
+    if action == "replace_create":
+        title = _series_generated.get("new_title", "")
+        data = manager.create(title, query.message.chat_id)
+        await query.edit_message_text(
+            "✅ Series **%s** created (0 prompts). Add prompts with `/series add <text>`."
+            % title, parse_mode="Markdown")
+        return
+
+    if action == "add_generated":
+        data = manager.load()
+        if not data:
+            await query.edit_message_text("Series was deleted — nothing to add.")
+            return
+        prompts = _series_generated.get("prompts", [])
+        if not prompts:
+            await query.edit_message_text("Nothing to add (menu expired — run /series generate again).")
+            return
+        added = 0
+        for p in prompts:
+            ok, _ = manager.add_prompt(data, p, _series_generated.get("fmt", "narration"))
+            if ok:
+                added += 1
+        if added:
+            manager.save(data)
+        _series_generated["prompts"] = []
+        await query.edit_message_text(
+            "✅ Added %d prompt(s) to **%s** (%d/%d queued)." % (
+                added, data["title"], len(data["prompts"]), config.SERIES_MAX_PROMPTS),
+            parse_mode="Markdown")
+        return
+
+    if action in ("run_now", "wait_slot"):
+        data = manager.load()
+        if action == "wait_slot":
+            if data:
+                await query.edit_message_text(
+                    "⏰ First run: %s" % manager.format_next_run(data), parse_mode="Markdown")
+            else:
+                await query.edit_message_text("Series no longer exists.")
+            return
+        # run_now: generate the next prompt immediately.
+        if not data:
+            await query.edit_message_text("Series no longer exists.")
+            return
+        if _job_slot_busy():
+            await query.edit_message_text(
+                "⏳ A video is already generating — the run will fire at %s."
+                % manager.format_next_run(data), parse_mode="Markdown")
+            return
+        prompt = manager.pop_next(data)
+        if prompt is None:
+            await query.edit_message_text("📭 No pending prompts in the queue.")
+            return
+        manager.mark_run_started(data)
+        manager.save(data)
+        await query.edit_message_text("🚀 Starting series run for `%s`..." % prompt["id"],
+                                      parse_mode="Markdown")
+        k, n = manager.run_position(data)
+        series_runner.launch_series_run(manager, data, prompt, k=k, n=n)
+        return
+
+    await query.edit_message_text("Unknown action.")

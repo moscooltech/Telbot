@@ -8,7 +8,8 @@ from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 from config import TELEGRAM_TOKEN
-from bot.handlers import start, generate, status, testimage, handle_callback
+from bot.handlers import (start, generate, status, testimage, handle_callback,
+                          series_command)
 
 # Configure logging
 logging.basicConfig(
@@ -31,6 +32,7 @@ bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CommandHandler("status", status))
 bot_app.add_handler(CommandHandler("testimage", testimage))
 bot_app.add_handler(CommandHandler(["generate", "gen"], generate))
+bot_app.add_handler(CommandHandler("series", series_command))
 bot_app.add_handler(CallbackQueryHandler(handle_callback))
 
 async def keep_alive_pinger():
@@ -76,6 +78,10 @@ async def on_startup():
     logger.info("🚀 Webhook service is ready!")
     # Start the pinger in the background
     asyncio.create_task(keep_alive_pinger())
+
+    # Content series scheduler (checks series/active.json every few minutes).
+    from services.series_scheduler import start_scheduler
+    start_scheduler(bot_app)
 
 @app.on_event("shutdown")
 async def on_shutdown():

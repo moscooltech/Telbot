@@ -3,6 +3,7 @@ Unit checks for the pure-Python logic of the new pipeline components.
 Run: python3 verify_logic.py
 No network or ffmpeg required. Safe to delete afterwards.
 """
+import json
 import os
 import sys
 
@@ -28,14 +29,48 @@ check("gemini model is 2.5 (1.5 shut down)", "2.5" in config.GEMINI_MODEL, confi
 check("BYTEZ models split (no overwrite bug)", config.BYTEZ_LLM_MODEL != config.BYTEZ_IMAGE_MODEL)
 check("tts voice default", "Andrew" in config.TTS_VOICE, config.TTS_VOICE)
 check("subtitle chunk size sane", 1 <= config.SUBTITLE_WORDS_PER_CHUNK <= 5)
+check("series cap is 50", config.SERIES_MAX_PROMPTS == 50, config.SERIES_MAX_PROMPTS)
+check("series completion message exact",
+      config.SERIES_COMPLETE_MESSAGE ==
+      "\u2705 Series complete! All prompts have been used. Use /series create <title> to start a new series.",
+      config.SERIES_COMPLETE_MESSAGE)
 
 print("== 2. llm_service provider chain ==")
+import services.llm_service as _llm_mod
 from services.llm_service import LLMService
 llm = LLMService()
-check("4 providers configured", len(llm.providers) == 4)
-check("groq uses new model", llm.providers[0]["model"] == config.GROQ_MODEL)
-check("bytez uses TEXT model (not SDXL)", llm.providers[3]["model"] == config.BYTEZ_LLM_MODEL)
-check("json_mode flagged for groq+gemini", llm.providers[0]["json_mode"] and llm.providers[1]["json_mode"])
+nu = len(config.UNOROUTER_MODELS)   # uno is expanded to one virtual provider per model
+check("uno entries + 4 base providers", len(llm.providers) == nu + 4, str(len(llm.providers)))
+check("uno first in chain", llm.providers[0]["name"].startswith("UnoRouter"), llm.providers[0]["name"])
+check("uno models in configured order",
+      [p["model"] for p in llm.providers[:nu]] == config.UNOROUTER_MODELS)
+check("uno hits api.unorouter.com v1",
+      all("api.unorouter.com/v1" in p["url"] for p in llm.providers[:nu]))
+check("uno json_mode on", all(p["json_mode"] for p in llm.providers[:nu]))
+check("groq after uno block",
+      llm.providers[nu]["name"] == "Groq" and llm.providers[nu]["model"] == config.GROQ_MODEL)
+check("gemini after groq", llm.providers[nu + 1]["name"] == "Gemini")
+check("bytez uses TEXT model (not SDXL)", llm.providers[nu + 3]["model"] == config.BYTEZ_LLM_MODEL)
+check("json_mode flagged for groq+gemini",
+      llm.providers[nu]["json_mode"] and llm.providers[nu + 1]["json_mode"])
+
+# Key gating: with a fake UnoRouter key its entries become the first ACTIVE
+# providers; without it the chain falls through to the keyed providers after.
+_saved_uno_key = _llm_mod.UNOROUTER_API_KEY
+try:
+    _llm_mod.UNOROUTER_API_KEY = "fake-key-123"
+    llm2 = _llm_mod.LLMService()
+    active = [p for p in llm2.providers if p["key"]]
+    names = [p["name"] for p in active]
+    check("fake key -> uno entries active first",
+          len(active) >= nu and names[0].startswith("UnoRouter") and active[0]["key"] == "fake-key-123",
+          str(names[:3]))
+    if "Groq" in names:
+        check("groq behind active uno", names.index("Groq") >= nu, str(names))
+    else:
+        check("active chain is uno-only when no other keys", len(active) == nu, str(names))
+finally:
+    _llm_mod.UNOROUTER_API_KEY = _saved_uno_key
 
 print("== 3. scene_generator logic ==")
 from services.scene_generator import detect_scene_count, clean_narration, extract_json
@@ -188,6 +223,178 @@ check("weak spine still reaches minimum", len(weak) >= config.MIN_CAPTION_CHARS,
 # Duplicates never appended
 no_dup = SceneGenerator._build_long_caption(spine["hook"], spine, "deep sea creatures")
 check("no duplicate hook", no_dup.count(spine["hook"]) == 1, no_dup[:120])
+
+print("== 7. series_manager state machine ==")
+import shutil
+import tempfile
+from datetime import datetime, timedelta
+from services.series_manager import (
+    SeriesManager, _tz, _anchor_seconds_past_midnight, _next_anchor_time,
+    REASON_OK, REASON_NOT_DUE, REASON_PAUSED, REASON_EMPTY, REASON_NO_SERIES,
+)
+
+_tmpdir = tempfile.mkdtemp(prefix="series_test_")
+sfile = os.path.join(_tmpdir, "active.json")
+mgr = SeriesManager(file_path=sfile)
+try:
+    # create / load roundtrip
+    data = mgr.create("Test Series", 42)
+    check("create writes file", os.path.exists(sfile))
+    check("create has empty queue", data["prompts"] == [])
+    check("create schedule disabled", data["schedule"]["enabled"] is False)
+    check("create owner chat id stored", data["owner_chat_id"] == 42)
+    check("load roundtrip", mgr.load() == data)
+    check("no tmp leftovers after save",
+          not [f for f in os.listdir(_tmpdir) if f.endswith(".tmp")], str(os.listdir(_tmpdir)))
+
+    # corrupt / invalid files degrade to None
+    badfile = os.path.join(_tmpdir, "bad.json")
+    with open(badfile, "w") as f:
+        f.write("{not json")
+    check("corrupt json -> None", SeriesManager(file_path=badfile).load() is None)
+    check("missing file -> None",
+          SeriesManager(file_path=os.path.join(_tmpdir, "nope.json")).load() is None)
+    with open(badfile, "w") as f:
+        json.dump({"title": "x", "prompts": [{"bad": 1}], "schedule": {}}, f)
+    check("structurally invalid -> None", SeriesManager(file_path=badfile).load() is None)
+
+    # add / pop FIFO + ids resequenced
+    mgr.add_prompt(data, "first prompt")
+    ok, reason = mgr.add_prompt(data, "second prompt", fmt="description")
+    check("add_prompt ok", ok and reason == "ok")
+    check("per-prompt format stored", data["prompts"][1]["format"] == "description")
+    ok, reason = mgr.add_prompt(data, "third prompt", fmt="bogus")
+    check("invalid format coerced to narration", data["prompts"][2]["format"] == "narration")
+    popped = mgr.pop_next(data)
+    check("pop is FIFO", popped["prompt"] == "first prompt", str(popped))
+    check("resequence after pop", data["prompts"][0]["id"] == "p001")
+    check("empty queue pop -> None", mgr.pop_next({"prompts": []}) is None)
+
+    # failed run: reinsert at head keeps retry-first ordering
+    mgr.reinsert_front(data, popped)
+    check("reinsert at head", data["prompts"][0]["prompt"] == "first prompt")
+    check("reinsert resets status pending", data["prompts"][0]["status"] == "pending")
+    check("reinsert resequences", data["prompts"][0]["id"] == "p001")
+
+    # 50-prompt hard cap
+    cap = mgr.create("Cap", 1)
+    for i in range(config.SERIES_MAX_PROMPTS):
+        mgr.add_prompt(cap, "p%d" % i)
+    ok, reason = mgr.add_prompt(cap, "one too many")
+    check("cap enforced at 50", not ok and reason == "cap", str((ok, reason)))
+    check("cap count exact", len(cap["prompts"]) == config.SERIES_MAX_PROMPTS)
+
+    # run_position labels (uses runs_completed)
+    pos = mgr.create("Pos", 1)
+    for i in range(3):
+        mgr.add_prompt(pos, "q%d" % i)
+    mgr.pop_next(pos)
+    check("run_position first of 3", mgr.run_position(pos) == (1, 3), str(mgr.run_position(pos)))
+    mgr.mark_run_succeeded(pos)
+    mgr.pop_next(pos)
+    check("run_position second of 3", mgr.run_position(pos) == (2, 3), str(mgr.run_position(pos)))
+    mgr.mark_run_failed(pos, "boom")
+    check("failed retry keeps k label", mgr.run_position(pos) == (2, 3), str(mgr.run_position(pos)))
+    check("failed reason stored", pos["schedule"]["last_failure"] == "boom")
+
+    # schedule: enable + next_run + is_due reasons
+    check("no series -> not due", mgr.is_due(None) == (False, REASON_NO_SERIES))
+    due, reason = mgr.is_due(pos)
+    check("disabled schedule -> paused", (due, reason) == (False, REASON_PAUSED), str((due, reason)))
+    mgr.set_schedule(pos, interval_hours=24, enabled=True)
+    check("set_schedule enables", pos["schedule"]["enabled"] is True)
+    check("set_schedule sets next_run", bool(pos["schedule"]["next_run"]))
+    due, reason = mgr.is_due(pos)
+    check("future next_run -> not due", (due, reason) == (False, REASON_NOT_DUE), str((due, reason)))
+    pos["schedule"]["next_run"] = (datetime.now(_tz()) - timedelta(minutes=5)).isoformat()
+    due, reason = mgr.is_due(pos)
+    check("overdue -> due", (due, reason) == (True, REASON_OK), str((due, reason)))
+
+    # enabled + never scheduled fires immediately
+    unsched = mgr.create("Unsched", 1)
+    mgr.add_prompt(unsched, "x")
+    unsched["schedule"]["enabled"] = True
+    check("enabled+unscheduled fires", mgr.is_due(unsched) == (True, REASON_OK))
+
+    # empty queue blocks firing even when overdue
+    emptyq = mgr.create("EmptyQ", 1)
+    mgr.set_schedule(emptyq, interval_hours=1, enabled=True)
+    emptyq["schedule"]["next_run"] = (datetime.now(_tz()) - timedelta(minutes=5)).isoformat()
+    check("empty queue -> not due", mgr.is_due(emptyq) == (False, REASON_EMPTY), str(mgr.is_due(emptyq)))
+
+    # pause / resume: overdue next_run survives and fires immediately
+    pos["schedule"]["enabled"] = False
+    check("pause blocks overdue", mgr.is_due(pos) == (False, REASON_PAUSED))
+    mgr.resume(pos)
+    check("resume keeps overdue -> fires", mgr.is_due(pos) == (True, REASON_OK))
+
+    # missed-slot detection + consume-once
+    pos["schedule"]["next_run"] = (datetime.now(_tz()) - timedelta(hours=3)).isoformat()
+    check("missed slot detected", mgr.is_missed_slot(pos, grace_seconds=120))
+    mgr.clear_missed_slot(pos)
+    check("clear_missed_slot stops repeat", not mgr.is_missed_slot(pos, grace_seconds=120))
+
+    # anchor math
+    check("anchor seconds", _anchor_seconds_past_midnight("09:30") == 9 * 3600 + 30 * 60)
+    check("anchor bad -> None", _anchor_seconds_past_midnight("99:99") is None)
+    tz = _tz()
+    nxt = _next_anchor_time(datetime(2026, 10, 9, 10, 0, tzinfo=tz), 24, "09:00")
+    check("anchor passed today -> tomorrow", (nxt.day, nxt.hour, nxt.minute) == (10, 9, 0), str(nxt))
+    nxt = _next_anchor_time(datetime(2026, 10, 9, 8, 0, tzinfo=tz), 24, "09:00")
+    check("anchor later today stays today", (nxt.day, nxt.hour) == (9, 9), str(nxt))
+    nxt = _next_anchor_time(datetime(2026, 10, 9, 10, 0, tzinfo=tz), 48, "09:00")
+    check("anchor honors 48h interval", (nxt.day, nxt.hour) == (11, 9), str(nxt))
+    anch = mgr.create("Anchor", 1)
+    mgr.add_prompt(anch, "x")
+    mgr.set_schedule(anch, interval_hours=24, anchor="09:00", enabled=True)
+    from services.series_manager import _parse_iso
+    adt = _parse_iso(anch["schedule"]["next_run"])
+    check("anchored next_run lands at 09:00 local",
+          adt.astimezone(tz).strftime("%H:%M") == "09:00", str(adt))
+    badanch = mgr.set_schedule(anch, anchor="99:99")
+    check("invalid anchor cleared", badanch["anchor"] is None)
+
+    # interval advance lands ~interval from now
+    adv = mgr.create("Adv", 1)
+    mgr.set_schedule(adv, interval_hours=6)
+    dt6 = _parse_iso(adv["schedule"]["next_run"])
+    delta_h = (dt6 - datetime.now(tz)).total_seconds() / 3600
+    check("6h interval advance", 5.8 < delta_h < 6.1, str(delta_h))
+
+    # completion condition: queue empty after final pop
+    fin = mgr.create("Fin", 1)
+    mgr.add_prompt(fin, "last one")
+    mgr.mark_run_started(fin)
+    last = mgr.pop_next(fin)
+    mgr.mark_run_succeeded(fin)
+    check("complete when queue empty after pop", len(mgr.pending_prompts(fin)) == 0)
+    check("runs_completed incremented", fin["schedule"]["runs_completed"] == 1)
+    check("last_result success", fin["schedule"]["last_result"] == "success")
+
+    # display text smoke
+    check("queue_text lists prompts", "p001" in mgr.queue_text(cap))
+    check("summary_text has title", "Cap" in mgr.summary_text(cap))
+finally:
+    shutil.rmtree(_tmpdir, ignore_errors=True)
+
+print("== 8. /series arg parsing ==")
+# Importing bot.handlers pulls telegram + edge-tts; slow but CI installs requirements.
+from bot.handlers import _parse_series_args, _series_add_payload
+sub, rest, fmt = _parse_series_args(["add", "hello", "world"])
+check("parse: sub + rest", sub == "add" and rest == ["hello", "world"])
+sub, rest, fmt = _parse_series_args(["add", "--format", "description", "x"])
+check("parse: --format stripped", fmt == "description" and rest == ["x"], str((rest, fmt)))
+payload, fmt = _series_add_payload("/series add line one\nline two")
+check("add payload keeps newlines", payload == "line one\nline two", repr(payload))
+check("add payload default fmt", fmt == "narration")
+payload, fmt = _series_add_payload("/series add --format description a\nb")
+check("add payload strips leading --format", payload == "a\nb" and fmt == "description", repr((payload, fmt)))
+payload, fmt = _series_add_payload("/series add single line --format narration")
+check("add payload strips trailing --format", payload == "single line" and fmt == "narration", repr((payload, fmt)))
+payload, fmt = _series_add_payload("/series add")
+check("add payload bare command empty", payload == "")
+payload, fmt = _series_add_payload("/series add p1\n\np2\np3")
+check("add payload skips blank lines downstream", [l for l in payload.split("\n") if l.strip()] == ["p1", "p2", "p3"], repr(payload))
 
 print("")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")

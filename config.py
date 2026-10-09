@@ -12,6 +12,19 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
 BYTEZ_API_KEY = os.getenv("BYTEZ_API_KEY", "")
 
+# UnoRouter - OpenAI-compatible gateway (https://unorouter.com), free ":free" models.
+# When set, UnoRouter is the FIRST provider in the LLM fallback chain (strongest free
+# models primary; protects Groq's 1,000 req/day quota from series automation).
+UNOROUTER_API_KEY = os.getenv("UNOROUTER_API_KEY", "")
+# Free-tier catalog shifts over time -> UNOROUTER_MODELS is a comma-separated list
+# tried in order (first that responds wins). Update here if a free model retires.
+UNOROUTER_MODELS = [
+    m.strip() for m in os.getenv(
+        "UNOROUTER_MODELS",
+        "gpt-5.4:free,gpt-5.5:free,deepseek-v4-flash:free"
+    ).split(",") if m.strip()
+]
+
 # Gemini image generation (Nano Banana) - NOTE: image models have ZERO free-tier
 # API quota (text works free, images do not). Only useful with a paid key.
 # Keep it in the chain behind Cloudflare; it is skipped automatically on 429s.
@@ -159,5 +172,21 @@ ENABLE_MEMORY_MONITORING = True
 MAX_CONCURRENT_JOBS = 1             # ONE JOB AT A TIME
 JOB_TIMEOUT_SECONDS = 600           # 10 minutes max
 
+# Content Series / Queue System (services/series_manager.py + services/series_scheduler.py)
+# State lives in ONE local JSON file. NOTE: Render's filesystem is ephemeral -
+# the series file is wiped on every redeploy/restart (accepted trade-off).
+SERIES_DIR = os.getenv("SERIES_DIR", "series")
+SERIES_FILE = os.getenv("SERIES_FILE", os.path.join(SERIES_DIR, "active.json"))
+SERIES_MAX_PROMPTS = int(os.getenv("SERIES_MAX_PROMPTS", "50"))        # hard cap on pending prompts
+SERIES_SCHEDULER_TICK_SECONDS = int(os.getenv("SERIES_SCHEDULER_TICK_SECONDS", "120"))
+SERIES_TIMEZONE = os.getenv("SERIES_TIMEZONE", "Africa/Lagos")         # anchor scheduling + display
+SERIES_MAX_PROMPTS_PER_GENERATE = 20   # /series generate <N> upper bound
+
 # Render Configuration
 RENDER_FREE_TIER = True
+
+# The exact completion message sent when the last series prompt is used.
+SERIES_COMPLETE_MESSAGE = (
+    "\u2705 Series complete! All prompts have been used. "
+    "Use /series create <title> to start a new series."
+)

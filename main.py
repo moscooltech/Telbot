@@ -2,7 +2,8 @@ import asyncio
 import logging
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 from config import TELEGRAM_TOKEN
-from bot.handlers import start, generate, status, testimage, handle_callback
+from bot.handlers import (start, generate, status, testimage, handle_callback,
+                          series_command)
 
 # Configure logging
 logging.basicConfig(
@@ -27,6 +28,7 @@ async def main():
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("testimage", testimage))
     app.add_handler(CommandHandler(["generate", "gen"], generate))
+    app.add_handler(CommandHandler("series", series_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     print("🚀 Bot is live and listening for messages!")
@@ -35,6 +37,10 @@ async def main():
         await app.initialize()
         await app.start()
         await app.updater.start_polling()
+
+        # Content series scheduler (checks series/active.json every few minutes).
+        from services.series_scheduler import start_scheduler
+        start_scheduler(app)
 
         # Keep the bot running until stopped
         try:

@@ -20,13 +20,14 @@ A fully automated Telegram bot that transforms a text prompt into a viral-ready 
 | Key | Where | Required |
 |---|---|---|
 | `TELEGRAM_TOKEN` | [@BotFather](https://t.me/BotFather) → `/newbot` | ✅ |
+| `UNOROUTER_API_KEY` | [unorouter.com](https://unorouter.com/) — **primary LLM**: OpenAI-compatible gateway with free GPT/DeepSeek/GLM models (free account, no credit card). Tried first so series automation doesn't burn Groq's 1k/day quota. Optional `UNOROUTER_MODELS` overrides the free-model list (tried in order). | recommended |
 | `GROQ_API_KEY` | [console.groq.com](https://console.groq.com/) (free tier: gpt-oss-120b) | recommended |
 | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com/) (free tier: gemini-2.5-flash) | recommended |
 | `POLLINATIONS_API_KEY` | [pollinations.ai](https://pollinations.ai/) — **recommended for images**: the key unlocks real Flux on gen.pollinations.ai, tried first. Without a key, the bot still works via the keyless legacy endpoint (weaker cartoonish "sana" model) | recommended |
 | `BYTEZ_API_KEY` | [bytez.com](https://bytez.com/) — optional last-resort image fallback (SDXL) and LLM fallback | optional |
 | `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | [Cloudflare](https://dash.cloudflare.com/) Workers AI (SDXL): dash.cloudflare.com → Workers AI → **"Use REST API"** → "Create a Workers AI token" (skips the confusing policy screen); Account ID is in the Workers & Pages dashboard right sidebar | optional |
 
-At least one LLM key is required; all four are chained with automatic fallback.
+At least one LLM key is required. When `UNOROUTER_API_KEY` is set it is tried first, then Groq → Gemini → Pollinations → Bytez, each with automatic fallback.
 
 ### Phase 2: Deploy on Render (Free Tier)
 
@@ -61,20 +62,61 @@ Wait 2–4 minutes on the free tier. You get a 9:16 MP4 with burned-in karaoke s
 
 `/testimage` is the fastest way to compare providers (e.g. Cloudflare FLUX.2 klein vs. the keyless fallback) without spending a whole video generation on it.
 
+## 📺 Content Series (Queue + Auto-Schedule)
+
+Queue up a batch of prompts once, then let the bot generate them one at a time on a recurring schedule — hands-off content. State lives in `series/active.json` (one active series at a time).
+
+**Typical flow**
+
+```
+/series create Mind-bending physics
+/series add Why time slows near a black hole
+/series add The double-slit experiment as a security camera
+/series schedule 24 at 09:00        → one video/day at 9am (Africa/Lagos)
+```
+
+After `/series schedule`, the bot asks whether to **generate the next prompt now** or **wait for the first slot**. Progress messages are prefixed `🎬 Series run k/n:`.
+
+**Subcommands**
+
+| Command | What it does |
+|---|---|
+| `/series` or `/series help` | Show this help. |
+| `/series create <title>` | Start a series (asks before replacing an existing one). Sets the owner chat for notifications. |
+| `/series add <text>` | Add prompt(s). Paste multi-line text → **one prompt per line** (blank lines skipped). Optional `--format narration\|description`. |
+| `/series generate <N> <brief>` | AI expands a brief into N distinct prompts, previews them, and queues them all on confirm. |
+| `/series list` | Show every queued prompt. |
+| `/series schedule <hours> [at HH:MM]` | Auto-generate every N hours, optionally anchored to a wall-clock time in `SERIES_TIMEZONE`. |
+| `/series pause` / `/series resume` | Suspend/resume the schedule (an overdue run fires immediately on resume). |
+| `/series run` | Generate the next queued prompt immediately. |
+| `/series status` | Compact summary: state, pending count, next run, last result. |
+| `/series clear` | Delete the series (asks for confirmation). |
+
+**How runs behave**
+
+- One video at a time — a due run waits for the idle job slot (queue order preserved).
+- A **failed** run keeps its prompt at the head of the queue and retries at the next scheduled slot.
+- When the last prompt is used, the bot sends: `✅ Series complete! All prompts have been used. Use /series create <title> to start a new series.` The schedule stays armed for the new series.
+- If the bot was down past a scheduled slot, it notifies you and generates on the next tick.
+- Queue is capped at `SERIES_MAX_PROMPTS` (default 50).
+
+> ⚠️ **Ephemeral disk on Render free tier:** `series/active.json` is wiped on every redeploy/restart. Re-add your prompts (or seed from `series/active.json.example`) after a deploy. Timezone defaults to `Africa/Lagos` (`SERIES_TIMEZONE`).
+
 ## 🛠️ Technical Notes
 
-- **JSON mode** is enabled on Groq/Gemini for reliable script output, with brace-slicing extraction as backup.
+- **JSON mode** is enabled on UnoRouter/Groq/Gemini for reliable script output, with brace-slicing extraction as backup.
 - **Fonts**: the Docker image ships DejaVu fonts; libass resolves the bold face automatically. Drop a `.ttf` in `assets/fonts/` to override.
 - **RAM safety**: 720×1280 renders, 1 concurrent job, stream-copy assembly, per-clip 90–120s timeouts.
 - **Tuning**: `SUBTITLE_WORDS_PER_CHUNK` (2), `SUBTITLE_FONT_SIZE` (54), `SUBTITLE_MARGIN_V` (210), `TTS_RATE` (+5%) — see `.env.example`.
 - **Optional offline TTS**: set `ENABLE_PIPER=true` + `PIPER_VOICE_PATH` to add a Piper fallback between edge-tts and gTTS.
 - Background music: drop `.mp3` files in `assets/music/` (mixed at 30% volume).
+- **Content series**: state + scheduler in `services/series_manager.py` / `series_scheduler.py`; the run loop reuses the same `SceneGenerator` + `run_generation_sync` pipeline as `/gen`.
 
 ## ⚠️ Free Tier Notes
 
 - Render free instances sleep after 15 min idle; the bot self-pings every 14 min, but a cold start needs a moment.
 - One video is generated at a time globally to stay within the 512MB limit.
-- Groq free tier: 30 req/min, 1,000 req/day (gpt-oss-120b replaced Llama 3.3 on 2026-08-16).
+- Groq free tier: 30 req/min, 1,000 req/day (gpt-oss-120b replaced Llama 3.3 on 2026-08-16). `UNOROUTER_API_KEY`, when set, is tried first so scheduled series runs don't consume that quota.
 
 ## 📜 License
 

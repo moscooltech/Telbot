@@ -23,6 +23,10 @@ assets/fonts/*.ttf
 *.jpg
 *.png
 
+# Content series runtime state (ephemeral on Render; recreated on demand)
+series/*.json
+!series/active.json.example
+
 # Logs
 *.log
 

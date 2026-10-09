@@ -2,7 +2,8 @@ import logging
 import requests
 from config import (
     GROQ_API_KEY, GEMINI_API_KEY, POLLINATIONS_API_KEY, BYTEZ_API_KEY,
-    GROQ_MODEL, GEMINI_MODEL, POLLINATIONS_MODEL, BYTEZ_LLM_MODEL
+    GROQ_MODEL, GEMINI_MODEL, POLLINATIONS_MODEL, BYTEZ_LLM_MODEL,
+    UNOROUTER_API_KEY, UNOROUTER_MODELS,
 )
 
 logger = logging.getLogger(__name__)
@@ -11,6 +12,17 @@ logger = logging.getLogger(__name__)
 class LLMService:
     def __init__(self):
         self.providers = [
+            # UnoRouter first (spec decision #12): strongest free models primary
+            # and Groq's 1,000 req/day quota is protected from series automation.
+            # UNOROUTER_MODELS is expanded into one virtual provider per model;
+            # the normal try/except falls through to the next model, then Groq.
+            *[{
+                "name": "UnoRouter (%s)" % model,
+                "url": "https://api.unorouter.com/v1/chat/completions",
+                "key": UNOROUTER_API_KEY,
+                "model": model,
+                "json_mode": True,   # best-effort; brace-slicing extract_json() is the safety net
+            } for model in UNOROUTER_MODELS],
             {
                 "name": "Groq",
                 "url": "https://api.groq.com/openai/v1/chat/completions",

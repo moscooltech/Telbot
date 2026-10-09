@@ -1,0 +1,33 @@
+{
+  "series_id": "series_a1b2c3",
+  "title": "Mind-bending physics",
+  "owner_chat_id": 123456789,
+  "created_at": "2026-10-09T09:00:00+01:00",
+  "schedule": {
+    "enabled": true,
+    "interval_hours": 24,
+    "anchor": "09:00",
+    "timezone": "Africa/Lagos",
+    "next_run": "2026-10-10T09:00:00+01:00",
+    "last_run": null,
+    "last_result": null,
+    "last_failure": null,
+    "runs_completed": 0
+  },
+  "prompts": [
+    {
+      "id": "p001",
+      "prompt": "Why time slows down near a black hole — explained with a falling clock",
+      "format": "narration",
+      "status": "pending",
+      "created_at": "2026-10-09T09:00:00+01:00"
+    },
+    {
+      "id": "p002",
+      "prompt": "The double-slit experiment, but it's a security camera watching you decide",
+      "format": "narration",
+      "status": "pending",
+      "created_at": "2026-10-09T09:00:00+01:00"
+    }
+  ]
+}
