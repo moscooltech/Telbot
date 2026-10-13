@@ -396,6 +396,81 @@ check("add payload bare command empty", payload == "")
 payload, fmt = _series_add_payload("/series add p1\n\np2\np3")
 check("add payload skips blank lines downstream", [l for l in payload.split("\n") if l.strip()] == ["p1", "p2", "p3"], repr(payload))
 
+print("== 9. /gen inline /mode wiring ==")
+import asyncio
+from unittest import mock as _mock
+from config import TEMP_DIR
+import bot.handlers as _handlers
+from services.image_generator import parse_image_mode
+
+check("parse: topic unchanged without a directive",
+      parse_image_mode("how a diesel engine works") == (None, "how a diesel engine works"))
+check("parse: /decompose split off",
+      parse_image_mode("/decompose how a diesel engine works")
+      == ("decompose", "how a diesel engine works"))
+
+
+class _FakeMessage:
+    def __init__(self):
+        self.texts = []
+
+    async def reply_text(self, text, **kwargs):
+        self.texts.append(text)
+
+
+class _FakeUpdate:
+    def __init__(self):
+        self.message = _FakeMessage()
+        self.effective_chat = type("Chat", (), {"id": 4242})()
+        self.effective_user = type("User", (), {"id": 7})()
+
+
+class _FakeContext:
+    def __init__(self, args):
+        self.args = args
+
+
+_seen = {}
+
+
+class _FakeSceneGenerator:
+    def generate_all(self, prompt):
+        _seen["topic"] = prompt
+        return (["scene one"], ["narr one"],
+                {"style_bible": "s", "caption": "c", "hashtags": "#x"})
+
+
+def _newest_job_file():
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    files = [os.path.join(TEMP_DIR, f) for f in os.listdir(TEMP_DIR)
+             if f.startswith("job_7_") and f.endswith(".json")]
+    return max(files, key=os.path.getmtime) if files else None
+
+
+_update = _FakeUpdate()
+with _mock.patch.object(_handlers, "SceneGenerator", lambda: _FakeSceneGenerator()):
+    asyncio.run(_handlers.generate(_update, _FakeContext(
+        ["/decompose", "how", "a", "diesel", "engine", "works"])))
+
+check("/gen hands the LLM the directive-free topic",
+      _seen.get("topic") == "how a diesel engine works", str(_seen))
+_job_file = _newest_job_file()
+check("/gen writes the job file", _job_file is not None, str(_job_file))
+if _job_file:
+    with open(_job_file, "r") as _fh:
+        _job = json.load(_fh)
+    check("/gen stores image_mode for the proceed callback",
+          _job.get("image_mode") == "decompose", str(_job.get("image_mode")))
+    os.remove(_job_file)
+
+# A bare directive with no topic after it is rejected, not silently generated.
+_update_bare = _FakeUpdate()
+with _mock.patch.object(_handlers, "SceneGenerator", lambda: _FakeSceneGenerator()):
+    asyncio.run(_handlers.generate(_update_bare, _FakeContext(["/diagram"])))
+check("/gen rejects a bare directive",
+      any("style directive" in t for t in _update_bare.message.texts),
+      str(_update_bare.message.texts))
+
 print("")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

@@ -14,9 +14,40 @@ from config import (
     CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, CLOUDFLARE_IMAGE_MODEL,
     CLOUDFLARE_KLEIN_MODELS, IMAGE_NEGATIVE_PROMPT, IMAGE_STYLE_SUFFIX,
     ENABLE_STYLE_SUFFIX,
+    IMAGE_MODES, IMAGE_MODE_DEFAULT, IMAGE_MODE_ALIASES,
 )
 
 logger = logging.getLogger(__name__)
+
+# Inline "/mode" directive: optional leading quotes/backticks (LLMs like to wrap
+# it), then the slash word, then an optional separator. Anything that is not a
+# known mode is left untouched.
+_MODE_DIRECTIVE_RE = re.compile(
+    r"^\s*[`'\"]*/([A-Za-z][A-Za-z0-9_-]*)[`'\"]*\s*[,:;-]?\s*(.*)$", re.S
+)
+
+
+def parse_image_mode(text):
+    """Split a leading inline "/mode" directive off an image prompt.
+
+    Returns ``(mode, clean_text)``:
+      * ``mode`` is a canonical key from ``config.IMAGE_MODES``, or ``None`` when
+        the prompt carries no known directive (the caller then applies its own
+        default - see ``ImageGenerator._resolve_mode``).
+      * ``clean_text`` never contains the directive, so it is safe to send to an
+        image model.
+
+    An unknown ``/word`` prefix is returned untouched (``None`` + original text)
+    so a stray slash word can never silently change the render style.
+    """
+    text = (text or "").strip()
+    m = _MODE_DIRECTIVE_RE.match(text)
+    if not m:
+        return None, text
+    mode = IMAGE_MODE_ALIASES.get(m.group(1).lower())
+    if not mode:
+        return None, text
+    return mode, m.group(2).strip()
 
 # Magic-byte sniffing: only trust payloads that are real images
 JPEG_MAGIC = b"\xff\xd8\xff"
@@ -31,24 +62,54 @@ PROVIDER_FAILURE_THRESHOLD = 2    # consecutive failures before cooldown kicks i
 
 
 class ImageGenerator:
-    def __init__(self, job_id: str, style_bible: str = "") -> None:
+    def __init__(self, job_id: str, style_bible: str = "", default_mode: Optional[str] = None) -> None:
         self.job_id = job_id
         self.job_dir = os.path.join(TEMP_DIR, job_id)
         self.image_dir = os.path.join(self.job_dir, "images")
         self.width = IMAGE_WIDTH
         self.height = IMAGE_HEIGHT
         self.style_bible = (style_bible or "").strip()
+        # Job-wide render style for scenes that carry no inline "/mode"
+        # directive. An inline directive always wins (see _resolve_mode), so a
+        # user can force "illustration" for the whole video while the script LLM
+        # still drops a single /diagram scene into it.
+        self.default_mode = IMAGE_MODE_ALIASES.get(
+            (default_mode or "").strip().lower(), IMAGE_MODE_DEFAULT
+        )
         # One seed per job keeps the visual identity stable across all scenes
         self.base_seed = random.randint(0, 999999) if CONSISTENT_SEED else None
         # key -> {"fails": int, "cooldown_until": epoch seconds}
         self._provider_stats = {}
         # "name (model)" -> how many final images this provider actually delivered
         self.provider_usage = {}
+        # mode -> how many images were delivered in that mode (shown in the summary)
+        self.mode_usage = {}
+        # Per-image gate for the klein multi-reference input: modes whose output
+        # is not a photo (diagram/spec/poster) must not be pulled back toward the
+        # job's first photographic frame. Reset per scene in generate_image().
+        self._use_anchor = True
 
         os.makedirs(self.image_dir, exist_ok=True)
         # Path of the first image generated this job. Sent as the klein
         # multi-reference input so later scenes keep the same character/look.
         self.anchor_image_path: Optional[str] = None
+
+    def _mode_config(self, mode: Optional[str]) -> dict:
+        """Config entry for a mode, falling back to the default photo mode."""
+        return IMAGE_MODES.get(mode) or IMAGE_MODES[IMAGE_MODE_DEFAULT]
+
+    def _resolve_mode(self, scene_prompt: str):
+        """Decide the render mode for ONE scene.
+
+        An inline "/mode" directive in the scene text wins - that is how the
+        script LLM drops a single diagram into an otherwise photorealistic
+        video. With no directive the job-wide ``default_mode`` applies.
+        Returns ``(mode, scene_text_without_directive)``.
+        """
+        mode, clean = parse_image_mode(scene_prompt)
+        if mode is None:
+            mode = self.default_mode
+        return mode, clean
 
     def _clean_prompt(self, prompt: str) -> str:
         """Sanitize prompt: strip quotes/newlines, collapse whitespace, cap length.
@@ -61,16 +122,22 @@ class ImageGenerator:
             prompt = " ".join(words[:IMAGE_PROMPT_MAX_WORDS])
         return prompt
 
-    def _build_prompt(self, scene_prompt: str) -> str:
-        """Fuse scene description with the job-wide style bible for coherence."""
+    def _build_prompt(self, scene_prompt: str, mode: Optional[str] = None) -> str:
+        """Fuse the scene description with the job-wide style bible and the mode's
+        own style words. ``scene_prompt`` must already be directive-free
+        (see _resolve_mode)."""
+        mode = mode or IMAGE_MODE_DEFAULT
         prompt = self._clean_prompt(scene_prompt)
         if self.style_bible:
             style_words = self._clean_prompt(self.style_bible)
             prompt = f"{prompt}, {style_words}"
-        # The photo-style suffix is appended AFTER word capping so it is never
-        # truncated away — it is what keeps generic models from drifting cartoonish.
-        if ENABLE_STYLE_SUFFIX and IMAGE_STYLE_SUFFIX:
-            prompt = f"{prompt}, {self._clean_prompt(IMAGE_STYLE_SUFFIX)}"
+        # The style words are appended AFTER word capping so they are never
+        # truncated away. ENABLE_STYLE_SUFFIX only gates the DEFAULT photo look;
+        # a non-photo mode always carries its own style (that is what was asked
+        # for - dropping it would make "/illustration" a no-op).
+        mode_style = self._mode_config(mode).get("style", "")
+        if mode_style and (mode != IMAGE_MODE_DEFAULT or ENABLE_STYLE_SUFFIX):
+            prompt = f"{prompt}, {self._clean_prompt(mode_style)}"
         return f"{prompt}, high quality, detailed, professional, 4k"
 
     @staticmethod
@@ -96,10 +163,13 @@ class ImageGenerator:
         return model in CLOUDFLARE_KLEIN_MODELS or "/flux-2" in model
 
     def _generate_cloudflare(self, prompt: str, seed: Optional[int], model: str,
-                             timeout: int) -> bytes:
+                             timeout: int, negative_prompt: str = "") -> bytes:
         url = (f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}"
                f"/ai/run/{model}")
         headers = {"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}"}
+        # Per-mode negative prompt; falls back to the photo default when the
+        # caller (or a direct unit test) does not supply one.
+        negative = negative_prompt or IMAGE_NEGATIVE_PROMPT
 
         if self._is_klein(model):
             # FLUX.2 klein requires multipart form data (documented in the Workers AI
@@ -114,14 +184,17 @@ class ImageGenerator:
             }
             if seed is not None:
                 data["seed"] = str(seed)
-            if IMAGE_NEGATIVE_PROMPT:
+            if negative:
                 # Not an official klein parameter; harmless as a hint unless the
                 # API starts rejecting unknown fields (then set IMAGE_NEGATIVE_PROMPT="")
-                data["negative_prompt"] = IMAGE_NEGATIVE_PROMPT
+                data["negative_prompt"] = negative
             # Multi-reference consistency: the first image of the job is sent as
             # input_image_0 so every later scene keeps the same character/look
             # ("klein supports up to 4 reference images", max 512x512 each).
-            if self.anchor_image_path and os.path.exists(self.anchor_image_path):
+            # Skipped for non-photo modes: pulling a schematic/spec sheet toward
+            # the job's first photograph would defeat the mode.
+            if (self._use_anchor and self.anchor_image_path
+                    and os.path.exists(self.anchor_image_path)):
                 with open(self.anchor_image_path, "rb") as ref_file:
                     response = requests.post(
                         url, data=data, headers=headers, timeout=timeout,
@@ -136,7 +209,7 @@ class ImageGenerator:
                 "width": self.width,
                 "height": self.height,
                 "num_steps": 12,
-                "negative_prompt": IMAGE_NEGATIVE_PROMPT,
+                "negative_prompt": negative,
             }
             if seed is not None:
                 payload["seed"] = seed
@@ -167,7 +240,9 @@ class ImageGenerator:
     # but serves its weak "sana" model (cartoonish look). Safety net only.
     # ------------------------------------------------------------------
     def _generate_pollinations_legacy(self, prompt: str, seed: Optional[int], model: str,
-                                      timeout: int) -> bytes:
+                                      timeout: int, negative_prompt: str = "") -> bytes:
+        # No negative-prompt field on this keyless endpoint: non-photo modes rely
+        # purely on their (positive) style words here.
         params = {
             "width": self.width,
             "height": self.height,
@@ -195,7 +270,8 @@ class ImageGenerator:
     # [TEXT, IMAGE]; the image comes back as inlineData base64 PNG.
     # ------------------------------------------------------------------
     def _generate_gemini(self, prompt: str, seed: Optional[int], model: str,
-                         timeout: int) -> bytes:
+                         timeout: int, negative_prompt: str = "") -> bytes:
+        # Gemini's endpoint takes no negative prompt; accepted for chain uniformity.
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -235,7 +311,8 @@ class ImageGenerator:
     # Provider 4: gen.pollinations.ai — needs POLLINATIONS_API_KEY, richer models
     # ------------------------------------------------------------------
     def _generate_pollinations_gen(self, prompt: str, seed: Optional[int], model: str,
-                                   timeout: int) -> bytes:
+                                   timeout: int, negative_prompt: str = "") -> bytes:
+        # gen.pollinations.ai has no documented negative-prompt parameter.
         params = {
             "model": model,
             "width": self.width,
@@ -262,7 +339,8 @@ class ImageGenerator:
     # Provider 5: Bytez — free-tier keyed fallback (SDXL)
     # ------------------------------------------------------------------
     def _generate_bytez(self, prompt: str, seed: Optional[int], model: Optional[str],
-                        timeout: int) -> bytes:
+                        timeout: int, negative_prompt: str = "") -> bytes:
+        # Bytez SDXL takes prompt/seed only.
         url = f"https://api.bytez.com/models/v2/{BYTEZ_IMAGE_MODEL}"
         payload = {"prompt": prompt}
         if seed is not None:
@@ -343,10 +421,20 @@ class ImageGenerator:
         return [(name, getattr(self, method_name), model) for name, method_name, model in chosen]
 
     def generate_image(self, prompt: str, index: int, retry: int = 2) -> Optional[str]:
-        """Generates a single image, trying every provider in the fallback chain."""
-        enhanced_prompt = self._build_prompt(prompt)
+        """Generates a single image, trying every provider in the fallback chain.
+
+        ``prompt`` may carry an inline "/mode" directive (see parse_image_mode);
+        it selects this image's style and negative prompt and is stripped before
+        anything reaches a provider."""
+        mode, scene_text = self._resolve_mode(prompt)
+        mode_cfg = self._mode_config(mode)
+        self._use_anchor = bool(mode_cfg.get("anchor", True))
+        enhanced_prompt = self._build_prompt(scene_text, mode=mode)
+        negative_prompt = mode_cfg.get("negative", IMAGE_NEGATIVE_PROMPT)
         filepath = os.path.join(self.image_dir, f"scene_{index:03d}.jpg")
 
+        if mode != IMAGE_MODE_DEFAULT:
+            logger.info("[Scene %s] Render mode: %s", index, mode)
         logger.info("[Scene %s] Generating image: %s...", index, enhanced_prompt[:60])
 
         seed = (self.base_seed + index) % 1000000 if self.base_seed is not None else None
@@ -362,15 +450,20 @@ class ImageGenerator:
                 try:
                     # Legacy tier is rate limited (~1 req / 15s); space out requests.
                     time.sleep(3)
-                    image_bytes = provider_fn(enhanced_prompt, seed, model, timeout=IMAGE_TIMEOUT)
+                    image_bytes = provider_fn(
+                        enhanced_prompt, seed, model,
+                        timeout=IMAGE_TIMEOUT, negative_prompt=negative_prompt,
+                    )
                     with open(filepath, "wb") as f:
                         f.write(image_bytes)
                     self._provider_stats[key] = {"fails": 0, "cooldown_until": 0.0}
-                    if self.anchor_image_path is None:
-                        # First success becomes the klein multi-reference anchor.
+                    if self.anchor_image_path is None and self._use_anchor:
+                        # First anchor-eligible success becomes the klein
+                        # multi-reference anchor.
                         self.anchor_image_path = filepath
                     usage_key = f"{provider_name} ({model})" if model else provider_name
                     self.provider_usage[usage_key] = self.provider_usage.get(usage_key, 0) + 1
+                    self.mode_usage[mode] = self.mode_usage.get(mode, 0) + 1
                     logger.info("[Scene %s] Success with %s (%s) attempt %s -> %s!",
                                 index, provider_name, model, attempt, filepath)
                     return filepath
@@ -385,12 +478,20 @@ class ImageGenerator:
 
     def provider_summary_text(self, total: int, ok: int) -> str:
         """Compact winner line, e.g. "10/10 scenes OK | winners: pollinations-gen (flux) x10".
-        Shown in Render logs and in the Telegram completion message."""
+        Shown in Render logs and in the Telegram completion message.
+        Non-photo render modes are appended when any were used, so it is obvious
+        from the completion message whether /illustration, /diagram etc. took
+        effect."""
         if not self.provider_usage:
             return f"{ok}/{total} scenes OK | no provider delivered an image"
         parts = [f"{name} x{count}" for name, count in
                  sorted(self.provider_usage.items(), key=lambda kv: -kv[1])]
-        return f"{ok}/{total} scenes OK | winners: " + ", ".join(parts)
+        line = f"{ok}/{total} scenes OK | winners: " + ", ".join(parts)
+        extra = [f"{mode} x{count}" for mode, count in sorted(self.mode_usage.items())
+                 if mode != IMAGE_MODE_DEFAULT]
+        if extra:
+            line += " | modes: " + ", ".join(extra)
+        return line
 
     def _log_provider_summary(self, total: int, ok: int) -> None:
         """One-line job summary of which provider/model actually produced the images,

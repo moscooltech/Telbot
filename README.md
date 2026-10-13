@@ -8,7 +8,7 @@ A fully automated Telegram bot that transforms a text prompt into a viral-ready 
 
 1. **Script (2-pass, aligned)** — the LLM first writes a *story spine* (motive, style bible, beats, hook, CTA), then writes every scene **from that spine** so scenes never drift off-topic. A cheap reviewer pass scores each scene 1–10 against the motive and auto-rewrites weak ones.
 2. **Approval** — you get a script preview with ✅ Proceed / 🔄 Regenerate buttons.
-3. **Images** — priority fallback chain: **Cloudflare Workers AI first when credentials are set** (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, free): FLUX.2 klein 4B (photorealistic, best prompt adherence) → SDXL → keyed Pollinations (real Flux; needs `POLLINATIONS_API_KEY`) → Gemini Nano Banana (paid only — zero free-tier image quota) → keyless Pollinations (always works, but weak cartoonish "sana" model — last-resort safety net) → Bytez. Photorealism is enforced with a negative prompt (no cartoon/anime/illustration) and a photo-style suffix on every prompt. With the **style bible + one consistent seed per job** so all scenes look like one video. The **first image generated also becomes the klein multi-reference anchor**: it is sent as `input_image_0` on every later klein request so the main character/look stays consistent across scenes.
+3. **Images** — priority fallback chain: **Cloudflare Workers AI first when credentials are set** (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, free): FLUX.2 klein 4B (photorealistic, best prompt adherence) → SDXL → keyed Pollinations (real Flux; needs `POLLINATIONS_API_KEY`) → Gemini Nano Banana (paid only — zero free-tier image quota) → keyless Pollinations (always works, but weak cartoonish "sana" model — last-resort safety net) → Bytez. Photorealism is enforced with a negative prompt (no cartoon/anime/illustration) and a photo-style suffix by default — overridable per image with an inline **`/mode`** directive ([Image Styles](#-image-styles-inline-mode-directives)). With the **style bible + one consistent seed per job** so all scenes look like one video. The **first image generated also becomes the klein multi-reference anchor**: it is sent as `input_image_0` on every later klein request so the main character/look stays consistent across scenes.
 4. **Voice** — edge-tts (`en-US-AndrewMultilingualNeural` by default, configurable via `TTS_VOICE`/`TTS_RATE`), with loudness normalization (-14 LUFS) and gTTS fallback. **Real word-level timings** are captured from the TTS engine.
 5. **Video** — per-scene clips with **TikTok-style karaoke subtitles**: words appear in 2–3 word chunks and the current word highlights **in perfect sync with the voice** (timings come from the TTS engine itself, not estimates). Bold font, safe-zone positioning, static-subtitle fallback if libass ever fails.
 6. **Assembly** — stream-copy concat (≈0 RAM) + audio mux, uploaded to Telegram with caption + hashtags.
@@ -60,7 +60,39 @@ Wait 2–4 minutes on the free tier. You get a 9:16 MP4 with burned-in karaoke s
               then send it back so you can judge quality before a full video
 ```
 
-`/testimage` is the fastest way to compare providers (e.g. Cloudflare FLUX.2 klein vs. the keyless fallback) without spending a whole video generation on it.
+`/testimage` is the fastest way to compare providers (e.g. Cloudflare FLUX.2 klein vs. the keyless fallback) without spending a whole video generation on it. Add a style to preview it: `/testimage /diagram`.
+
+## 🎨 Image Styles (inline `/mode` directives)
+
+Every image renders as a **photorealistic photo by default**. Some topics need the opposite — an illustration, a design/spec sheet, an exploded (item-decomposition) view, a technical schematic or a typographic poster — so a prompt may start with **one** directive and that image is rendered that way instead:
+
+| Directive | Renders |
+|---|---|
+| `/illustration` | drawn / editorial art |
+| `/design` (alias `/spec`) | design or specification sheet, labelled callouts |
+| `/decompose` (alias `/exploded`) | exploded view / item decomposition |
+| `/diagram` (alias `/schematic`) | technical schematic, labelled parts |
+| `/poster` | graphic poster with typography |
+| `/photo` | the default photorealistic look (forces a photo back) |
+
+**Whole video** — put the directive first in the prompt:
+
+```
+/gen /decompose how a diesel engine works
+/series add /illustration the water cycle explained for kids
+```
+
+**One image** — the script LLM may also attach a directive to a single scene when it judges a photo would be wrong (a mechanism diagram, an exploded view, a spec sheet…). It is told to use them **sparingly** and never more than one per prompt. An inline directive in a scene **overrides** the job-wide one, so `/gen /illustration …` plus one `/diagram` scene gives you exactly one diagram. Set `ENABLE_LLM_IMAGE_MODES=false` to stop the LLM choosing modes yourself and only honour the directives you type.
+
+What a mode actually swaps, for the images it applies to:
+
+| | photo (default) | non-photo modes |
+|---|---|---|
+| style suffix | `IMAGE_STYLE_SUFFIX` (photorealistic, DSLR…) | the mode's own style words |
+| negative prompt | `IMAGE_NEGATIVE_PROMPT` (bans cartoon/anime/illustration/**text**) | `IMAGE_NEGATIVE_CORE` + mode bans — **text/labels allowed**, drawings allowed |
+| klein reference image | yes (keeps the same character) | no (a photo reference would fight a schematic) |
+
+The directive is stripped before anything reaches an image provider, so providers never see a slash command. Modes are data: `IMAGE_MODES` in `config.py`.
 
 ## 📺 Content Series (Queue + Auto-Schedule)
 
@@ -111,6 +143,7 @@ After `/series schedule`, the bot asks whether to **generate the next prompt now
 - **Optional offline TTS**: set `ENABLE_PIPER=true` + `PIPER_VOICE_PATH` to add a Piper fallback between edge-tts and gTTS.
 - Background music: drop `.mp3` files in `assets/music/` (mixed at 30% volume).
 - **Content series**: state + scheduler in `services/series_manager.py` / `series_scheduler.py`; the run loop reuses the same `SceneGenerator` + `run_generation_sync` pipeline as `/gen`.
+- **Image styles**: one source of truth — `IMAGE_MODES` / `IMAGE_MODE_ALIASES` in `config.py` (style suffix, negative prompt and klein-anchor flag per mode); `parse_image_mode()` in `services/image_generator.py` resolves a mode per scene (`ImageGenerator._resolve_mode`), and `services/scene_generator.py` tells the script LLM it may emit a directive.
 
 ## ⚠️ Free Tier Notes
 

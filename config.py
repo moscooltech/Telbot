@@ -74,6 +74,123 @@ IMAGE_STYLE_SUFFIX = os.getenv(
     "realistic lighting, shot on dslr, 35mm, shallow depth of field",
 )
 
+# ---------------------------------------------------------------------------
+# Image style modes - inline "/mode" directives
+# ---------------------------------------------------------------------------
+# The default pipeline forces photorealism: IMAGE_STYLE_SUFFIX pushes models
+# toward photos and IMAGE_NEGATIVE_PROMPT actively bans "illustration",
+# "drawing" and "text". Some videos legitimately need the opposite - an
+# illustration, a design/specification sheet, an exploded (item decomposition)
+# view, a technical schematic or a typographic poster - and the photo-forcing
+# config above made those images impossible.
+#
+# Any image prompt may therefore START with an inline directive - "/illustration
+# ...", "/design ...", "/decompose ...", "/diagram ...", "/poster ...", or
+# "/photo" to force the default back - and the renderer swaps that image's
+# style suffix and negative prompt for the mode's own. The directive itself is
+# never sent to the image model.
+#
+# Two sources, and an inline directive always wins over the job default:
+#   * the user, on /gen or /series add -> job-wide default for that video
+#   * the script LLM, inside one scene description -> that single image only
+#     (tools/services/scene_generator.py tells it to pick the best mode per
+#      scene when - and only when - a realistic photo would be wrong)
+#
+# ENABLE_LLM_IMAGE_MODES=false stops the LLM from choosing modes itself;
+# user-typed directives keep working either way.
+
+# Shared quality floor, safe for EVERY mode: unlike IMAGE_NEGATIVE_PROMPT it
+# bans neither text/labels nor drawings, because design sheets, exploded views,
+# schematics and posters legitimately contain both.
+IMAGE_NEGATIVE_CORE = (
+    "low quality, blurry, deformed, watermark, oversaturated, jpeg artifacts"
+)
+
+# mode -> {"style": positive-prompt suffix, "negative": provider negative prompt,
+#          "anchor": use the job's first image as the klein multi-reference input}
+IMAGE_MODES = {
+    # Default mode == exactly the pre-mode behavior (photo suffix + photo negatives).
+    "photo": {
+        "style": IMAGE_STYLE_SUFFIX,
+        "negative": IMAGE_NEGATIVE_PROMPT,
+        "anchor": True,      # keeps the main character/look consistent across scenes
+    },
+    "illustration": {
+        "style": (
+            "digital illustration, clean confident line art, flat vibrant color "
+            "palette, editorial illustration style, hand-drawn texture"
+        ),
+        "negative": (
+            IMAGE_NEGATIVE_CORE + ", photograph, photorealistic, photo, 3d render, cgi"
+        ),
+        "anchor": True,      # same character, drawn
+    },
+    "design": {
+        "style": (
+            "clean design specification sheet, structured technical layout, "
+            "labelled callouts and annotations, alignment grid, neutral background, "
+            "professional spec-sheet presentation"
+        ),
+        "negative": (
+            IMAGE_NEGATIVE_CORE + ", photograph, photorealistic, clutter, mess, "
+            "unreadable text, gibberish text"
+        ),
+        "anchor": False,     # a character reference would fight the layout
+    },
+    "decompose": {
+        "style": (
+            "exploded view technical illustration, components separated in space "
+            "along alignment axes, labelled parts, clean neutral background, "
+            "precise line work"
+        ),
+        "negative": (
+            IMAGE_NEGATIVE_CORE + ", photograph, photorealistic, fully assembled, "
+            "cluttered background"
+        ),
+        "anchor": False,
+    },
+    "diagram": {
+        "style": (
+            "technical schematic diagram, precise clean line work, labelled "
+            "components and flow arrows, blueprint aesthetic, neutral background"
+        ),
+        "negative": (
+            IMAGE_NEGATIVE_CORE + ", photograph, photorealistic, 3d render, "
+            "heavy shading, photographic depth of field"
+        ),
+        "anchor": False,
+    },
+    "poster": {
+        "style": (
+            "bold graphic poster design, strong typographic hierarchy, high "
+            "contrast composition, print-ready layout, limited color palette"
+        ),
+        "negative": (
+            IMAGE_NEGATIVE_CORE + ", photograph, photorealistic, low resolution, "
+            "muddy colors"
+        ),
+        "anchor": False,
+    },
+}
+
+IMAGE_MODE_DEFAULT = "photo"
+
+# Accepted spellings -> canonical mode key. Keeps the directive forgiving while
+# never guessing: an unknown "/word" is left in the prompt untouched.
+IMAGE_MODE_ALIASES = {
+    "photo": "photo", "photograph": "photo", "photorealistic": "photo",
+    "illustration": "illustration", "illustrate": "illustration",
+    "art": "illustration", "artwork": "illustration",
+    "design": "design", "spec": "design", "specsheet": "design",
+    "decompose": "decompose", "decomposition": "decompose",
+    "exploded": "decompose", "explode": "decompose",
+    "diagram": "diagram", "schematic": "diagram", "blueprint": "diagram",
+    "poster": "poster",
+}
+
+# Let the script LLM choose a non-photo mode when a scene needs one.
+ENABLE_LLM_IMAGE_MODES = os.getenv("ENABLE_LLM_IMAGE_MODES", "true").lower() == "true"
+
 # Default Models (verified September 2026)
 # NOTE: Llama 3.3 70B left Groq's free tier on 2026-08-16 -> gpt-oss-120b is the free replacement.
 GROQ_MODEL = "openai/gpt-oss-120b"

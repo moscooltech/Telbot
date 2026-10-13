@@ -20,6 +20,7 @@ import time
 
 from config import SERIES_COMPLETE_MESSAGE
 from utils.telegram_api import TelegramAPI
+from services.image_generator import parse_image_mode
 from services.scene_generator import SceneGenerator
 from services.series_manager import SeriesManager
 
@@ -84,13 +85,20 @@ def _run_series_video(manager, data, prompt, chat_id, prompt_text, fmt, k, n):
             k, n, data.get("title", "series"), prompt_text[:100]),
     )
 
+    # A leading "/mode" directive in the stored prompt picks the render style for
+    # the whole run (e.g. "/decompose how a diesel engine works"); a scene's own
+    # description can still override it image by image.
+    image_mode, topic = parse_image_mode(prompt_text)
+
     # Script generation straight to production - NO preview / approval buttons.
     try:
         sg = SceneGenerator()
-        scenes, narrations, metadata = sg.generate_all(prompt_text)
+        scenes, narrations, metadata = sg.generate_all(topic or prompt_text)
     except Exception as e:
         _on_series_failure(manager, data, prompt, chat_id, e)
         return
+    if image_mode:
+        metadata["image_mode"] = image_mode
 
     from bot.handlers import run_generation_sync  # late import avoids a cycle
     run_generation_sync(

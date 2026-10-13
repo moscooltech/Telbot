@@ -10,7 +10,7 @@ import re
 from telegram import Update
 from telegram.ext import ContextTypes
 from services.scene_generator import SceneGenerator, extract_json
-from services.image_generator import ImageGenerator
+from services.image_generator import ImageGenerator, parse_image_mode
 from services.audio_processor import AudioProcessor
 from services.video_processor import VideoProcessor
 from config import TEMP_DIR, MUSIC_DIR, VIDEO_DURATION_PER_SCENE, SERIES_FILE
@@ -30,6 +30,10 @@ _last_job_summary = None
 # Provider plan captured when /testimage was sent (button index -> plan entry).
 _testimage_plan = []
 
+# Prompt captured when /testimage was sent (the default, or whatever the user
+# typed after an optional "/mode" directive).
+_testimage_prompt = ""
+
 # Fixed photorealistic test prompt: concrete topic objects (meter, AC unit),
 # so the test also shows whether a provider renders scenes or just faces.
 _TESTIMAGE_PROMPT = (
@@ -48,7 +52,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Example: `/gen A story about a lost astronaut on a neon planet.`\n\n"
         "Other commands:\n"
         "• /testimage — generate one test image with a provider you pick\n"
+        "• /testimage /decompose — same, but rendered in a specific style\n"
         "• /status — provider fallback order + last job summary\n\n"
+        "🎨 **Image styles** — start any prompt with one directive and that image is "
+        "rendered as art instead of a photo:\n"
+        "`/illustration` · `/design` (spec sheet) · `/decompose` (exploded view) · "
+        "`/diagram` · `/poster` · `/photo` (default).\n"
+        "Example: `/gen /decompose how a diesel engine works`\n\n"
         "📺 **Content series** (queue + auto-schedule): /series",
         parse_mode="Markdown"
     )
@@ -85,8 +95,14 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def testimage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for /testimage: generate ONE image with a provider you pick."""
-    global _testimage_plan
+    """Handler for /testimage: generate ONE image with a provider you pick.
+
+    Accepts an optional inline "/mode" directive and/or a custom prompt, so the
+    image styles can be previewed provider by provider before a full video:
+        /testimage /decompose
+        /testimage /poster a retro travel poster for Mars
+    """
+    global _testimage_plan, _testimage_prompt
     plan = ImageGenerator._chain_plan()
     if not plan:
         await update.message.reply_text(
@@ -97,6 +113,14 @@ async def testimage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     _testimage_plan = plan
 
+    # Optional rendering style + custom prompt.
+    mode, custom = parse_image_mode(" ".join(context.args or []))
+    prompt = custom or _TESTIMAGE_PROMPT
+    if mode:
+        prompt = f"/{mode} {prompt}"
+    _testimage_prompt = prompt
+    mode_label = ("🎨 style: `/%s`\n" % mode) if mode else ""
+
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     rows = []
     for idx, (name, _fn, model) in enumerate(plan):
@@ -105,8 +129,9 @@ async def testimage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         "🧪 **Image Provider Test**\n\n"
-        "Pick a provider from the fallback order. It generates ONE image with this prompt:\n"
-        f"`{_TESTIMAGE_PROMPT}`\n\n"
+        + mode_label
+        + "Pick a provider from the fallback order. It generates ONE image with this prompt:\n"
+        f"`{prompt}`\n\n"
         "The photo is sent back here so you can judge quality and topic accuracy "
         "before running a full video."
     )
@@ -128,6 +153,7 @@ async def _run_testimage(query, data: str):
 
     name, _fn, model = _testimage_plan[idx]
     label = name + (f" ({model})" if model else "")
+    prompt = _testimage_prompt or _TESTIMAGE_PROMPT
     chat_id = query.message.chat_id
     await query.edit_message_text(f"🧪 Testing **{label}**... (can take up to a minute)")
 
@@ -146,7 +172,7 @@ async def _run_testimage(query, data: str):
         ig_logger.setLevel(logging.INFO)
         try:
             ig = ImageGenerator(f"testimage_{int(time.time())}")
-            path = ig.generate_image(_TESTIMAGE_PROMPT, 0)
+            path = ig.generate_image(prompt, 0)
             result["path"] = path
             result["summary"] = ig.provider_summary_text(1, 1 if path else 0)
         except Exception as e:
@@ -210,7 +236,14 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please provide a prompt after the format!")
         return
 
-    prompt = " ".join(prompt_parts)
+    # An inline "/mode" directive sets the render style for the whole job, e.g.
+    # "/gen /illustration the water cycle". Individual scenes may still override
+    # it from inside their own image descriptions.
+    image_mode, prompt = parse_image_mode(" ".join(prompt_parts))
+    if not prompt:
+        await update.message.reply_text("❌ Please add a prompt after the style directive!")
+        return
+
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     job_id = f"{user_id}_{int(time.time())}"
@@ -221,6 +254,8 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         sg = SceneGenerator()
         scenes, narrations, metadata = sg.generate_all(prompt)
+        if image_mode:
+            metadata["image_mode"] = image_mode
 
         # Build preview message with all narrations
         preview = "📝 **Script Preview:**\n\n"
@@ -245,6 +280,7 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         job_data = {
             "prompt": prompt,
             "video_format": video_format,
+            "image_mode": image_mode,
             "chat_id": chat_id,
             "scenes": scenes,
             "narrations": narrations,
@@ -301,7 +337,13 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             )
 
         # --- PHASE 2: IMAGES (with job-wide style bible for visual coherence) ---
-        ig = ImageGenerator(job_id, style_bible=metadata.get("style_bible", ""))
+        # default_mode is the job-wide render style from an inline "/mode"
+        # directive on the prompt; scene descriptions may override it per image.
+        ig = ImageGenerator(
+            job_id,
+            style_bible=metadata.get("style_bible", ""),
+            default_mode=metadata.get("image_mode"),
+        )
         image_paths = []
         failed_scenes = 0
         for i, scene in enumerate(scenes):
@@ -596,12 +638,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             prompt = job_data.get("prompt", "")
             video_format = job_data.get("video_format", "narration")
+            image_mode = job_data.get("image_mode")
 
             await query.edit_message_text("🔄 Regenerating script...")
 
             try:
                 sg = SceneGenerator()
                 scenes, narrations, metadata = sg.generate_all(prompt)
+                if image_mode:
+                    metadata["image_mode"] = image_mode
 
                 # Show new preview
                 preview = "📝 **Regenerated Script:**\n\n"

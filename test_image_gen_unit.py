@@ -3,6 +3,7 @@ Offline unit tests for the ImageGenerator fallback chain (no network, no API key
 Run: python test_image_gen_unit.py
 """
 import os
+import re
 import logging
 import shutil
 from unittest import mock
@@ -331,7 +332,175 @@ finally:
 check("empty summary warns when nothing succeeded",
       any("no provider" in msg for msg in captured_empty), str(captured_empty))
 
+print("== 8. inline /mode directives (illustration / design / decompose / diagram / poster) ==")
+from services.image_generator import parse_image_mode
+from services.scene_generator import SceneGenerator, mode_directive_help
+import services.scene_generator as sg_mod
+
+print("== 8a. directive parsing ==")
+check("plain prompt has no mode", parse_image_mode("a fox in a forest") == (None, "a fox in a forest"))
+check("explicit /photo parsed", parse_image_mode("/photo a fox") == ("photo", "a fox"))
+check("/illustration parsed",
+      parse_image_mode("/illustration the water cycle") == ("illustration", "the water cycle"))
+check("/decompose parsed",
+      parse_image_mode("/decompose a diesel engine") == ("decompose", "a diesel engine"))
+check("/spec alias maps to design", parse_image_mode("/spec sheet layout") == ("design", "sheet layout"))
+check("colon separator tolerated", parse_image_mode("/diagram: a flow") == ("diagram", "a flow"))
+check("backtick-wrapped directive tolerated",
+      parse_image_mode("`/poster` retro travel") == ("poster", "retro travel"))
+check("leading whitespace tolerated",
+      parse_image_mode("   /decomposition engine parts") == ("decompose", "engine parts"))
+check("bare directive yields an empty body", parse_image_mode("/diagram") == ("diagram", ""))
+check("unknown /word left untouched", parse_image_mode("/specify a fox") == (None, "/specify a fox"))
+check("mid-prompt slash ignored", parse_image_mode("a fox /illustration") == (None, "a fox /illustration"))
+
+print("== 8b. mode table ==")
+check("all six modes configured",
+      set(config.IMAGE_MODES) == {"photo", "illustration", "design", "decompose", "diagram", "poster"},
+      str(sorted(config.IMAGE_MODES)))
+check("photo mode == the pre-mode behavior",
+      config.IMAGE_MODES["photo"]["style"] == config.IMAGE_STYLE_SUFFIX
+      and config.IMAGE_MODES["photo"]["negative"] == config.IMAGE_NEGATIVE_PROMPT)
+check("every mode has style + negative + anchor flag",
+      all(m.get("style") and m.get("negative") and isinstance(m.get("anchor"), bool)
+          for m in config.IMAGE_MODES.values()))
+check("non-photo negatives stop banning drawings",
+      all("illustration" not in config.IMAGE_MODES[m]["negative"]
+          for m in config.IMAGE_MODES if m != "photo"))
+check("non-photo negatives stop blanket-banning text/labels",
+      all(not re.search(r"(^|,\s*)(text|words|labels)(\s*,|$)",
+                        config.IMAGE_MODES[m]["negative"])
+          for m in config.IMAGE_MODES if m != "photo"),
+      str({m: config.IMAGE_MODES[m]["negative"] for m in config.IMAGE_MODES if m != "photo"}))
+check("photo negative still bans illustration + text",
+      "illustration" in config.IMAGE_MODES["photo"]["negative"]
+      and "text" in config.IMAGE_MODES["photo"]["negative"])
+check("photo keeps the klein anchor, schematics drop it",
+      config.IMAGE_MODES["photo"]["anchor"] and not config.IMAGE_MODES["diagram"]["anchor"])
+
+print("== 8c. per-scene mode resolution ==")
+_gen = make_gen()
+check("default mode is photo", _gen.default_mode == "photo")
+check("no directive -> job default", _gen._resolve_mode("a fox") == ("photo", "a fox"))
+_gen_art = ImageGenerator("verify_image_unit_art", style_bible="s", default_mode="illustration")
+check("job default applies without a directive",
+      _gen_art._resolve_mode("a fox") == ("illustration", "a fox"))
+check("inline directive overrides the job default",
+      _gen_art._resolve_mode("/diagram a circuit") == ("diagram", "a circuit"))
+check("explicit /photo overrides a non-photo job default",
+      _gen_art._resolve_mode("/photo a fox") == ("photo", "a fox"))
+check("alias default_mode is normalised",
+      ImageGenerator("verify_image_unit_alias", default_mode="art").default_mode == "illustration")
+check("unknown default_mode falls back to photo",
+      ImageGenerator("verify_image_unit_bad", default_mode="nope").default_mode == "photo")
+
+print("== 8d. prompt + negative swap per mode ==")
+_photo_prompt = _gen._build_prompt("a fox", mode="photo")
+_art_prompt = _gen._build_prompt("a fox", mode="illustration")
+check("photo prompt keeps the photo suffix",
+      config.IMAGE_STYLE_SUFFIX.split(",")[0] in _photo_prompt, _photo_prompt)
+check("illustration prompt swaps the style",
+      "digital illustration" in _art_prompt
+      and "photorealistic, candid documentary" not in _art_prompt, _art_prompt)
+check("directive text never reaches the provider",
+      "/illustration" not in _art_prompt, _art_prompt)
+check("quality tail always present",
+      _art_prompt.endswith("high quality, detailed, professional, 4k"), _art_prompt)
+check("style bible still fused in non-photo modes",
+      "watercolor style" in _art_prompt, _art_prompt)
+
+print("== 8e. mode reaches the provider request ==")
+with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", "acc"), \
+     mock.patch.object(ig_mod, "CLOUDFLARE_API_TOKEN", "tok"), \
+     mock.patch.object(ig_mod.time, "sleep", lambda s: None), \
+     mock.patch.object(ig_mod.requests, "post", return_value=cf_json_response()) as _post:
+    _gen_dia = make_gen()
+    _path = _gen_dia.generate_image("/diagram a circuit board", 0)
+    check("diagram image generated", _path is not None, str(_path))
+    _form = _post.call_args.kwargs.get("data", {})
+    check("diagram negative sent (no drawing bans)",
+          "photograph" in _form.get("negative_prompt", "")
+          and "illustration" not in _form.get("negative_prompt", ""),
+          str(_form.get("negative_prompt")))
+    check("klein anchor skipped for non-photo modes",
+          "files" not in _post.call_args.kwargs, str(list(_post.call_args.kwargs)))
+    check("mode usage recorded", _gen_dia.mode_usage == {"diagram": 1}, str(_gen_dia.mode_usage))
+
+# Anchor gating: a real reference file, toggled by the mode.
+_anchor_file = os.path.join(TEMP_DIR, JOB, "anchor_probe.jpg")
+with open(_anchor_file, "wb") as _af:
+    _af.write(JPEG_MAGIC + b"x" * 5000)
+_gen_anchor = make_gen()
+_gen_anchor.anchor_image_path = _anchor_file
+_klein = config.CLOUDFLARE_KLEIN_MODELS[0]
+with mock.patch.object(ig_mod.requests, "post", return_value=cf_json_response()) as _post:
+    _gen_anchor._use_anchor = True
+    _gen_anchor._generate_cloudflare("x", 1, _klein, 30, negative_prompt="n")
+    check("photo mode sends the klein anchor",
+          "files" in _post.call_args.kwargs, str(list(_post.call_args.kwargs)))
+with mock.patch.object(ig_mod.requests, "post", return_value=cf_json_response()) as _post:
+    _gen_anchor._use_anchor = False
+    _gen_anchor._generate_cloudflare("x", 2, _klein, 30, negative_prompt="n")
+    check("non-photo mode withholds the klein anchor",
+          "files" not in _post.call_args.kwargs, str(list(_post.call_args.kwargs)))
+
+print("== 8f. mode usage surfaces in the summary ==")
+_gen_sum = make_gen()
+_gen_sum.provider_usage = {"cloudflare (m)": 2}
+_gen_sum.mode_usage = {"photo": 1, "diagram": 1}
+check("summary names non-default modes",
+      "modes: diagram x1" in _gen_sum.provider_summary_text(2, 2),
+      _gen_sum.provider_summary_text(2, 2))
+_gen_sum.mode_usage = {"photo": 2}
+check("summary hides the default mode",
+      "modes:" not in _gen_sum.provider_summary_text(2, 2),
+      _gen_sum.provider_summary_text(2, 2))
+
+print("== 8g. the script LLM is told it may pick a mode ==")
+with mock.patch.object(sg_mod, "ENABLE_LLM_IMAGE_MODES", True):
+    _help = mode_directive_help()
+    check("mode help offered when enabled", "/decompose" in _help and "/poster" in _help, _help[:80])
+    check("mode help names every non-photo mode",
+          all(("/" + m) in _help for m in config.IMAGE_MODES if m != "photo"), _help)
+with mock.patch.object(sg_mod, "ENABLE_LLM_IMAGE_MODES", False):
+    check("mode help disappears when disabled", mode_directive_help() == "")
+
+_captured = {}
+
+
+class _CaptureLLM:
+    def __init__(self, reply):
+        self.reply = reply
+
+    def generate_text(self, system_prompt, user_prompt, **kwargs):
+        _captured["sys"] = system_prompt
+        return self.reply
+
+
+_sg = SceneGenerator.__new__(SceneGenerator)
+_sg.llm = _CaptureLLM('{"prompts": ["a fox, wide shot, soft light"]}')
+with mock.patch.object(sg_mod, "ENABLE_LLM_IMAGE_MODES", True):
+    _sg._polish_visuals({"motive": "m", "style_bible": "s"}, [{"description": "d"}])
+check("polish prompt offers the render modes", "/diagram" in _captured["sys"], _captured["sys"][:120])
+with mock.patch.object(sg_mod, "ENABLE_LLM_IMAGE_MODES", False):
+    _sg._polish_visuals({"motive": "m", "style_bible": "s"}, [{"description": "d"}])
+check("polish prompt drops the modes when disabled",
+      "/diagram" not in _captured["sys"], _captured["sys"][:120])
+
+_sg.llm = _CaptureLLM('{"scenes": [{"narration": "n", "description": "d"}], "caption": "c", "hashtags": []}')
+_spine = {"motive": "m", "style_bible": "s", "beats": [], "hook": "", "cta": ""}
+with mock.patch.object(sg_mod, "ENABLE_LLM_IMAGE_MODES", True):
+    _sg._generate_scenes("topic", _spine, 1, 2)
+check("scene prompt offers the render modes", "/decompose" in _captured["sys"], _captured["sys"][:120])
+with mock.patch.object(sg_mod, "ENABLE_LLM_IMAGE_MODES", False):
+    _sg._generate_scenes("topic", _spine, 1, 2)
+check("scene prompt drops the modes when disabled",
+      "/decompose" not in _captured["sys"], _captured["sys"][:120])
+
 shutil.rmtree(os.path.join(TEMP_DIR, JOB), ignore_errors=True)
+for _extra in ("verify_image_unit_art", "verify_image_unit_alias", "verify_image_unit_bad",
+               "verify_image_unit_modes"):
+    shutil.rmtree(os.path.join(TEMP_DIR, _extra), ignore_errors=True)
 
 print(f"\nRESULT: {passed} passed, {failed} failed")
 if failed:

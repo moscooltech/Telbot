@@ -6,10 +6,40 @@ from config import (
     MIN_SCENES, MAX_SCENES,
     ENABLE_RELEVANCE_CHECK, RELEVANCE_MIN_SCORE, MAX_SCENE_REWRITES,
     ENABLE_PROMPT_POLISH, MIN_CAPTION_CHARS,
+    ENABLE_LLM_IMAGE_MODES, IMAGE_MODES, IMAGE_MODE_DEFAULT,
 )
 from services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
+
+
+def mode_directive_help():
+    """Instructions letting the script LLM choose a non-photo render mode.
+
+    Some scenes are simply the wrong image as a photograph - an illustration, a
+    design/specification sheet, an exploded (item decomposition) view, a
+    technical schematic or a typographic poster. The LLM prefixes such a scene's
+    image prompt with ONE inline directive and
+    ``ImageGenerator._resolve_mode`` picks it up per scene.
+
+    Returns "" when the feature is disabled, so the prompts degrade to exactly
+    the previous text.
+    """
+    if not ENABLE_LLM_IMAGE_MODES:
+        return ""
+    modes = ", ".join("/" + m for m in IMAGE_MODES if m != IMAGE_MODE_DEFAULT)
+    return (
+        "Render modes (use sparingly): if - and only if - a realistic photograph "
+        "would be the wrong image for a scene, start that scene's image prompt "
+        "with exactly ONE directive so the renderer switches style: " + modes + ". "
+        "Pick the single best fit (/illustration drawn art, /design design or "
+        "specification sheet, /decompose exploded view or item decomposition, "
+        "/diagram technical schematic, /poster graphic poster with typography). "
+        "Words and labels ARE wanted in /design, /decompose, /diagram and "
+        "/poster prompts, and must stay out of photorealistic ones. "
+        "Most scenes need NO directive and stay photorealistic. Never invent a "
+        "directive and never use more than one per prompt."
+    )
 
 
 def detect_scene_count(prompt):
@@ -165,6 +195,8 @@ class SceneGenerator:
     def _generate_scenes(self, prompt, spine, min_s, max_s):
         """Pass 2: full script where every scene is derived from the spine."""
         beats = "; ".join(f"{i + 1}. {b}" for i, b in enumerate(spine["beats"])) or "n/a"
+        mode_help = mode_directive_help()
+        mode_rule = ("- " + mode_help + "\n") if mode_help else ""
         system_prompt = (
             "You are a Professional AI Video Producer. Write the full script using the story spine below.\n\n"
             "STORY SPINE\n"
@@ -179,7 +211,8 @@ class SceneGenerator:
             "- Follow the beat structure: scene 1 is the hook, the last scene is the call to action.\n"
             '- "narration": 20-30 words of natural spoken text, proper grammar/punctuation, no "scene N"/"step N" numbering.\n'
             '- "description": a vivid image-generation prompt. It MUST reuse the same subject/setting/style as the style bible so all scenes look like one video.\n'
-            '- "caption": a complete, natural social-media post caption for the finished video: '
+            + mode_rule
+            + '- "caption": a complete, natural social-media post caption for the finished video: '
             f'AT LEAST 200 characters (aim for 250-400) and 3-5 sentences, describing what the video '
             "shows, one surprising detail, and why it is worth watching. NEVER write placeholders "
             "like 'viral hook', 'viral reel' or 'amazing video'.\n\n"
@@ -241,8 +274,11 @@ class SceneGenerator:
         Prompt-engineering pass: rewrite every scene description into a
         structured image prompt (subject -> action -> setting -> shot ->
         lighting -> style), locked to the style bible so all images
-        look like one coherent video.
+        look like one coherent video. The LLM may also attach ONE render-mode
+        directive to the scenes that are not meant to be photographs.
         """
+        mode_help = mode_directive_help()
+        mode_rule = ("6. " + mode_help + "\n") if mode_help else ""
         system_prompt = (
             "You are an expert prompt engineer for text-to-image models (Flux, SDXL).\n"
             "For each numbered scene description below, rewrite it into ONE polished image prompt.\n\n"
@@ -251,9 +287,11 @@ class SceneGenerator:
             "Rules for each prompt:\n"
             "1. One line, comma-separated layers in this order: main subject with concrete details, action/pose, setting/environment, camera shot (e.g. close-up, wide establishing shot, low angle), lighting, art style/mood.\n"
             "2. Reuse the same main character/subject description across ALL scenes so they look like the same video.\n"
-            "3. Visual, concrete language only: no abstract ideas, no text/words/numbers/logos in the image, no narration, no 'scene N'.\n"
+            "3. Visual, concrete language only: no abstract ideas, no narration, no 'scene N'. Keep words and labels out of photorealistic prompts - they render as garbage.\n"
             "4. 25-45 words. No quotes. No trailing period.\n"
-            "5. Every prompt must VISUALIZE the topic, not just show a generic person: include the concrete objects, machinery, data displays or environments the scene is actually about (e.g. for an electricity bill topic: smart meter, AC unit, glowing watt meter, utility bill, power lines, wiring, appliance energy use). A person may appear only while interacting with those objects.\n\n"
+            "5. Every prompt must VISUALIZE the topic, not just show a generic person: include the concrete objects, machinery, data displays or environments the scene is actually about (e.g. for an electricity bill topic: smart meter, AC unit, glowing watt meter, utility bill, power lines, wiring, appliance energy use). A person may appear only while interacting with those objects.\n"
+            + mode_rule
+            + "\n"
             "Scene descriptions:\n"
             + "\n".join(f"{i + 1}. {s.get('description', '')}" for i, s in enumerate(scenes)) + "\n\n"
             'Output JSON ONLY: {"prompts": ["prompt 1", "prompt 2", ...]} — one polished prompt per scene, same order.'
