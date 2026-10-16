@@ -281,7 +281,7 @@ class SceneGenerator:
         directive to the scenes that are not meant to be photographs.
         """
         mode_help = mode_directive_help()
-        mode_rule = ("7. " + mode_help + "\n") if mode_help else ""
+        mode_rule = ("8. " + mode_help + "\n") if mode_help else ""
         system_prompt = (
             "You are an expert prompt engineer for text-to-image models (Flux, SDXL).\n"
             "For each numbered scene description below, rewrite it into ONE polished image prompt.\n\n"
@@ -291,13 +291,17 @@ class SceneGenerator:
             "1. One line, comma-separated layers in this order: main subject with concrete details, action/pose, setting/environment, camera shot (e.g. close-up, wide establishing shot, low angle), lighting, art style/mood.\n"
             "2. Every prompt is a DIFFERENT moment of the story: change the place, the action and the camera shot between scenes. Describe the same character identically ONLY while that character is really in the scene, and never repeat the previous prompt's framing or composition.\n"
             "3. Vary the shot list on purpose: across the whole set use a mix of wide establishing shots, medium shots and close-ups, and give consecutive scenes different angles (low, high, over-the-shoulder, detail insert).\n"
-            "4. Visual, concrete language only: no abstract ideas, no narration, no 'scene N'. Keep words and labels out of photorealistic prompts - they render as garbage.\n"
-            "5. 25-45 words. No quotes. No trailing period.\n"
-            "6. Every prompt must VISUALIZE the topic, not just show a generic person: include the concrete objects, machinery, data displays or environments the scene is actually about (e.g. for an electricity bill topic: smart meter, AC unit, glowing watt meter, utility bill, power lines, wiring, appliance energy use). A person may appear only while interacting with those objects.\n"
+            "4. Depict what THIS scene's narration is actually talking about - its objects, action and setting - so the picture presents the spoken line. Never draw the words themselves.\n"
+            "5. Visual, concrete language only: no abstract ideas, no narration text, no 'scene N'. Keep words and labels out of photorealistic prompts - they render as garbage.\n"
+            "6. 25-45 words. No quotes. No trailing period.\n"
+            "7. Every prompt must VISUALIZE the topic, not just show a generic person: include the concrete objects, machinery, data displays or environments the scene is actually about (e.g. for an electricity bill topic: smart meter, AC unit, glowing watt meter, utility bill, power lines, wiring, appliance energy use). A person may appear only while interacting with those objects.\n"
             + mode_rule
             + "\n"
-            "Scene descriptions:\n"
-            + "\n".join(f"{i + 1}. {s.get('description', '')}" for i, s in enumerate(scenes)) + "\n\n"
+            "Scenes (numbered; the narration is what the scene SAYS, the visual is the current image prompt):\n"
+            + "\n".join(
+                f"{i + 1}. narration: {s.get('narration', '')} | visual: {s.get('description', '')}"
+                for i, s in enumerate(scenes)
+            ) + "\n\n"
             'Output JSON ONLY: {"prompts": ["prompt 1", "prompt 2", ...]} — one polished prompt per scene, same order.'
         )
         content = self.llm.generate_text(

@@ -519,8 +519,14 @@ check("scene prompt drops the modes when disabled",
 
 print("== 8h. every scene must be its own moment, not a re-render ==")
 _sg.llm = _CaptureLLM('{"prompts": ["p"]}')
-_sg._polish_visuals({"motive": "m", "style_bible": "s"}, [{"description": "d"}])
+_sg._polish_visuals({"motive": "m", "style_bible": "s"},
+                    [{"narration": "the meter spins backwards", "description": "d"}])
 _polish_sys = _captured["sys"]
+check("polish sees each scene's narration",
+      "the meter spins backwards" in _polish_sys, _polish_sys[-200:])
+check("polish must depict what the narration says",
+      "talking about" in _polish_sys[:_polish_sys.find("Scene")]
+      or "Depict what THIS scene's narration" in _polish_sys, _polish_sys[:400])
 check("polish demands a DIFFERENT moment per scene",
       "DIFFERENT moment" in _polish_sys, _polish_sys[:200])
 check("polish varies the shot list across scenes",

@@ -101,7 +101,7 @@ Coherence and variety are two different things, and getting the balance wrong is
 - **Each scene is its own moment.** The script LLM must move the story forward and change the **place, action and camera shot** between scenes, and the prompt-polish pass must vary the shot list (wide establishing → medium → close-up) instead of re-describing the previous frame. The style bible pins the *look* (art style, palette, lighting, lens) — never the location or the framing.
 - **The klein reference image is OFF by default.** `ENABLE_IMAGE_ANCHOR=false` (default) sends no reference image, so every scene is generated from its own prompt. Set `ENABLE_IMAGE_ANCHOR=true` only for a character-driven video where one person must look identical in every scene — on a 4-step distilled model like FLUX.2 klein a reference image outranks the text prompt, which is exactly what makes later scenes come back as near-copies of scene 1.
 
-Scene ↔ image pairing is **index-stable**: if a scene's image fails, that scene is dropped together with its narration and subtitles rather than shifting every later scene onto the previous scene's image.
+Scene ↔ image ↔ narration pairing is **index-stable**: a scene is only kept if both its image and its narration rendered. A failed image (or a failed TTS line) drops that whole scene — image, clip, narration audio, subtitles — instead of shifting every later scene onto the previous scene's image and the next scene's duration/subtitle timings. The prompt-polish pass also sees each scene's narration, so the image presents what that scene actually says.
 
 ## 📺 Content Series (Queue + Auto-Schedule)
 

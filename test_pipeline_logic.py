@@ -472,7 +472,7 @@ check("/gen rejects a bare directive",
       str(_update_bare.message.texts))
 
 print("== 10. scene / image / narration pairing stays index-aligned ==")
-from bot.handlers import _picked_pairs, _drop_unvoiced_scenes
+from bot.handlers import _picked_pairs, _drop_unvoiced_scenes, _drop_silent_scenes
 
 _scenes = ["s0", "s1", "s2", "s3"]
 _narrs = ["n0", "n1", "n2", "n3"]
@@ -510,6 +510,24 @@ _sc, _na = _drop_unvoiced_scenes(["s0", "s1"], ["n0", "n1"])
 check("all-voiced input is untouched", (_sc, _na) == (["s0", "s1"], ["n0", "n1"]), str((_sc, _na)))
 _sc, _na = _drop_unvoiced_scenes(["s0", "s1"], ["", "  "])
 check("all-unvoiced input yields empty lists", (_sc, _na) == ([], []), str((_sc, _na)))
+
+# A scene whose TTS failed is dropped with its image, so every later clip keeps
+# its own duration/subtitle timings instead of borrowing the next scene's.
+_imgs, _narrs, _audio = _drop_silent_scenes(
+    ["i0", "i1", "i2"], ["n0", "n1", "n2"],
+    [("/a0", 5.0, "t0"), (None, 0, None), ("/a2", 7.0, "t2")],
+)
+check("failed narration drops its scene, image and clip text together",
+      (_imgs, _narrs, [a[0] for a in _audio]) == (["i0", "i2"], ["n0", "n2"], ["/a0", "/a2"]),
+      str((_imgs, _narrs, _audio)))
+check("surviving scenes keep their own durations/timings",
+      [_audio[0][1], _audio[1][1]] == [5.0, 7.0] and _audio[1][2] == "t2", str(_audio))
+_imgs, _narrs, _audio = _drop_silent_scenes(["i0", "i1"], ["n0", "n1"],
+                                            [("/a0", 1.0, None), ("/a1", 2.0, None)])
+check("all-voiced scenes are untouched",
+      (_imgs, _narrs, len(_audio)) == (["i0", "i1"], ["n0", "n1"], 2), str((_imgs, _narrs)))
+_imgs, _narrs, _audio = _drop_silent_scenes(["i0"], ["n0"], [(None, 0, None)])
+check("all-silent scenes are dropped", (_imgs, _narrs, _audio) == ([], [], []), str((_imgs, _narrs, _audio)))
 
 print("")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")

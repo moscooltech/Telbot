@@ -312,6 +312,26 @@ def _drop_unvoiced_scenes(scenes, narrations):
     return [s for s, _ in kept], [n for _, n in kept]
 
 
+def _drop_silent_scenes(image_paths, narrations, scene_audio):
+    """Drop the scenes whose narration audio failed, image and text included.
+
+    TTS returns ``(None, 0, None)`` for a scene it could not voice. Appending
+    only the successful ones would leave ``durations``/word-timings one short, so
+    every later clip would render with the NEXT scene's duration and subtitle
+    timings while the concatenated narration track drifts further behind the
+    pictures with each skipped scene. Dropping the whole scene keeps the clips,
+    their narration audio and their subtitles in step.
+
+    Returns ``(image_paths, narrations, scene_audio)`` filtered together.
+    """
+    kept = [k for k, audio in enumerate(scene_audio) if audio and audio[0]]
+    return (
+        [image_paths[k] for k in kept],
+        [narrations[k] for k in kept],
+        [scene_audio[k] for k in kept],
+    )
+
+
 def _picked_pairs(scenes, narrations, generated):
     """Index-stable pairing of rendered images with their own scene and narration.
 
@@ -483,7 +503,11 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             if unique_count < len(unique_narrations) * 0.7:  # At least 70% should be unique
                 raise Exception("AI Director returned repetitive narrations. Retrying...")
 
+            # Collect the audio PER SCENE (scene order), so a scene that could
+            # not be voiced can be dropped together with its image instead of
+            # shifting every later clip's duration, subtitles and audio.
             num_narrations = len(unique_narrations)
+            scene_audio = []  # [(path, duration, word_timings)] in scene order
             for i, narration_text in enumerate(unique_narrations):
                 if status_msg_id:
                     TelegramAPI.edit_message(
@@ -491,14 +515,20 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                         message_id=status_msg_id,
                         text=_status_text(f"🎙️ **Step 3/5:** Generating AI narration... ({i+1}/{num_narrations})")
                     )
-                path, dur, timings = ap.generate_single_narration(narration_text, i)
-                if path:
-                    narration_paths.append(path)
-                    durations.append(dur)
-                    word_timings_data.append(timings)
+                scene_audio.append(ap.generate_single_narration(narration_text, i))
 
-            if not narration_paths:  # Only raise if narration expected
+            if not any(audio[0] for audio in scene_audio):  # Only raise if narration expected
                 raise Exception("Failed to generate narration files.")
+
+            image_paths, unique_narrations, scene_audio = _drop_silent_scenes(
+                image_paths, unique_narrations, scene_audio
+            )
+            if len(scene_audio) < num_narrations:
+                logger.warning("Job %s: skipping %s scene(s) with failed narration.",
+                               job_id, num_narrations - len(scene_audio))
+            narration_paths = [audio[0] for audio in scene_audio]
+            durations = [audio[1] for audio in scene_audio]
+            word_timings_data = [audio[2] for audio in scene_audio]
         else:  # video_format == "description"
             logger.info("Skipping narration audio generation for 'description' format.")
             # Set durations to match images for video processing, even without narration audio
