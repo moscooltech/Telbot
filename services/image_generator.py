@@ -15,6 +15,7 @@ from config import (
     CLOUDFLARE_KLEIN_MODELS, IMAGE_NEGATIVE_PROMPT, IMAGE_STYLE_SUFFIX,
     ENABLE_STYLE_SUFFIX,
     IMAGE_MODES, IMAGE_MODE_DEFAULT, IMAGE_MODE_ALIASES,
+    ENABLE_IMAGE_ANCHOR,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,14 +85,14 @@ class ImageGenerator:
         self.provider_usage = {}
         # mode -> how many images were delivered in that mode (shown in the summary)
         self.mode_usage = {}
-        # Per-image gate for the klein multi-reference input: modes whose output
-        # is not a photo (diagram/spec/poster) must not be pulled back toward the
-        # job's first photographic frame. Reset per scene in generate_image().
-        self._use_anchor = True
+        # Per-image gate for the klein multi-reference input, reset for every
+        # scene in generate_image(): only anchor-eligible modes (photo,
+        # illustration) AND ENABLE_IMAGE_ANCHOR may reuse the first frame.
+        self._use_anchor = False
 
         os.makedirs(self.image_dir, exist_ok=True)
-        # Path of the first image generated this job. Sent as the klein
-        # multi-reference input so later scenes keep the same character/look.
+        # Path of the first image generated this job, sent as the klein
+        # multi-reference input when ENABLE_IMAGE_ANCHOR is on.
         self.anchor_image_path: Optional[str] = None
 
     def _mode_config(self, mode: Optional[str]) -> dict:
@@ -188,11 +189,14 @@ class ImageGenerator:
                 # Not an official klein parameter; harmless as a hint unless the
                 # API starts rejecting unknown fields (then set IMAGE_NEGATIVE_PROMPT="")
                 data["negative_prompt"] = negative
-            # Multi-reference consistency: the first image of the job is sent as
-            # input_image_0 so every later scene keeps the same character/look
-            # ("klein supports up to 4 reference images", max 512x512 each).
-            # Skipped for non-photo modes: pulling a schematic/spec sheet toward
-            # the job's first photograph would defeat the mode.
+            # Multi-reference consistency: when ENABLE_IMAGE_ANCHOR is on, the
+            # first image of the job is sent as input_image_0 so every later
+            # scene keeps the same character/look ("klein supports up to 4
+            # reference images", max 512x512 each). Off by default - attached to
+            # every scene it dominated the prompt and turned the video into one
+            # frame re-rendered over and over. Never used for non-photo modes:
+            # pulling a schematic/spec sheet toward the job's first photograph
+            # would defeat the mode.
             if (self._use_anchor and self.anchor_image_path
                     and os.path.exists(self.anchor_image_path)):
                 with open(self.anchor_image_path, "rb") as ref_file:
@@ -428,7 +432,9 @@ class ImageGenerator:
         anything reaches a provider."""
         mode, scene_text = self._resolve_mode(prompt)
         mode_cfg = self._mode_config(mode)
-        self._use_anchor = bool(mode_cfg.get("anchor", True))
+        # Read the module-level flag (not an __init__ copy) so it can be toggled
+        # at runtime/tests; the mode must be anchor-eligible as well.
+        self._use_anchor = bool(mode_cfg.get("anchor", True)) and ENABLE_IMAGE_ANCHOR
         enhanced_prompt = self._build_prompt(scene_text, mode=mode)
         negative_prompt = mode_cfg.get("negative", IMAGE_NEGATIVE_PROMPT)
         filepath = os.path.join(self.image_dir, f"scene_{index:03d}.jpg")
@@ -458,8 +464,8 @@ class ImageGenerator:
                         f.write(image_bytes)
                     self._provider_stats[key] = {"fails": 0, "cooldown_until": 0.0}
                     if self.anchor_image_path is None and self._use_anchor:
-                        # First anchor-eligible success becomes the klein
-                        # multi-reference anchor.
+                        # First anchor-eligible success becomes this job's klein
+                        # multi-reference image (only used when the flag is on).
                         self.anchor_image_path = filepath
                     usage_key = f"{provider_name} ({model})" if model else provider_name
                     self.provider_usage[usage_key] = self.provider_usage.get(usage_key, 0) + 1

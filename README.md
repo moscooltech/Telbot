@@ -8,7 +8,7 @@ A fully automated Telegram bot that transforms a text prompt into a viral-ready 
 
 1. **Script (2-pass, aligned)** — the LLM first writes a *story spine* (motive, style bible, beats, hook, CTA), then writes every scene **from that spine** so scenes never drift off-topic. A cheap reviewer pass scores each scene 1–10 against the motive and auto-rewrites weak ones.
 2. **Approval** — you get a script preview with ✅ Proceed / 🔄 Regenerate buttons.
-3. **Images** — priority fallback chain: **Cloudflare Workers AI first when credentials are set** (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, free): FLUX.2 klein 4B (photorealistic, best prompt adherence) → SDXL → keyed Pollinations (real Flux; needs `POLLINATIONS_API_KEY`) → Gemini Nano Banana (paid only — zero free-tier image quota) → keyless Pollinations (always works, but weak cartoonish "sana" model — last-resort safety net) → Bytez. Photorealism is enforced with a negative prompt (no cartoon/anime/illustration) and a photo-style suffix by default — overridable per image with an inline **`/mode`** directive ([Image Styles](#-image-styles-inline-mode-directives)). With the **style bible + one consistent seed per job** so all scenes look like one video. The **first image generated also becomes the klein multi-reference anchor**: it is sent as `input_image_0` on every later klein request so the main character/look stays consistent across scenes.
+3. **Images** — priority fallback chain: **Cloudflare Workers AI first when credentials are set** (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, free): FLUX.2 klein 4B (photorealistic, best prompt adherence) → SDXL → keyed Pollinations (real Flux; needs `POLLINATIONS_API_KEY`) → Gemini Nano Banana (paid only — zero free-tier image quota) → keyless Pollinations (always works, but weak cartoonish "sana" model — last-resort safety net) → Bytez. Photorealism is enforced with a negative prompt (no cartoon/anime/illustration) and a photo-style suffix by default — overridable per image with an inline **`/mode`** directive ([Image Styles](#-image-styles-inline-mode-directives)). Coherence comes from the **style bible + one seed per job**, while every scene is prompted as **its own moment** (different place, action and camera shot — see [Scene variety](#-scene-variety)), so the video is not one frame re-rendered.
 4. **Voice** — edge-tts (`en-US-AndrewMultilingualNeural` by default, configurable via `TTS_VOICE`/`TTS_RATE`), with loudness normalization (-14 LUFS) and gTTS fallback. **Real word-level timings** are captured from the TTS engine.
 5. **Video** — per-scene clips with **TikTok-style karaoke subtitles**: words appear in 2–3 word chunks and the current word highlights **in perfect sync with the voice** (timings come from the TTS engine itself, not estimates). Bold font, safe-zone positioning, static-subtitle fallback if libass ever fails.
 6. **Assembly** — stream-copy concat (≈0 RAM) + audio mux, uploaded to Telegram with caption + hashtags.
@@ -90,9 +90,18 @@ What a mode actually swaps, for the images it applies to:
 |---|---|---|
 | style suffix | `IMAGE_STYLE_SUFFIX` (photorealistic, DSLR…) | the mode's own style words |
 | negative prompt | `IMAGE_NEGATIVE_PROMPT` (bans cartoon/anime/illustration/**text**) | `IMAGE_NEGATIVE_CORE` + mode bans — **text/labels allowed**, drawings allowed |
-| klein reference image | yes (keeps the same character) | no (a photo reference would fight a schematic) |
+| klein reference image | only if `ENABLE_IMAGE_ANCHOR=true` (keeps the same character) | no (a photo reference would fight a schematic) |
 
 The directive is stripped before anything reaches an image provider, so providers never see a slash command. Modes are data: `IMAGE_MODES` in `config.py`.
+
+## 🎞️ Scene Variety
+
+Coherence and variety are two different things, and getting the balance wrong is what turns a video into **one image edited over and over**. Two rules keep them apart:
+
+- **Each scene is its own moment.** The script LLM must move the story forward and change the **place, action and camera shot** between scenes, and the prompt-polish pass must vary the shot list (wide establishing → medium → close-up) instead of re-describing the previous frame. The style bible pins the *look* (art style, palette, lighting, lens) — never the location or the framing.
+- **The klein reference image is OFF by default.** `ENABLE_IMAGE_ANCHOR=false` (default) sends no reference image, so every scene is generated from its own prompt. Set `ENABLE_IMAGE_ANCHOR=true` only for a character-driven video where one person must look identical in every scene — on a 4-step distilled model like FLUX.2 klein a reference image outranks the text prompt, which is exactly what makes later scenes come back as near-copies of scene 1.
+
+Scene ↔ image pairing is **index-stable**: if a scene's image fails, that scene is dropped together with its narration and subtitles rather than shifting every later scene onto the previous scene's image.
 
 ## 📺 Content Series (Queue + Auto-Schedule)
 
@@ -144,6 +153,7 @@ After `/series schedule`, the bot asks whether to **generate the next prompt now
 - Background music: drop `.mp3` files in `assets/music/` (mixed at 30% volume).
 - **Content series**: state + scheduler in `services/series_manager.py` / `series_scheduler.py`; the run loop reuses the same `SceneGenerator` + `run_generation_sync` pipeline as `/gen`.
 - **Image styles**: one source of truth — `IMAGE_MODES` / `IMAGE_MODE_ALIASES` in `config.py` (style suffix, negative prompt and klein-anchor flag per mode); `parse_image_mode()` in `services/image_generator.py` resolves a mode per scene (`ImageGenerator._resolve_mode`), and `services/scene_generator.py` tells the script LLM it may emit a directive.
+- **Scene variety**: `ENABLE_IMAGE_ANCHOR` (default `false`) decides whether the job's first image is reused as a klein reference; `services/scene_generator.py` requires a distinct moment/place/shot per scene. `bot/handlers.py::_picked_pairs` / `_drop_unvoiced_scenes` keep scene ↔ image ↔ narration index-aligned when a scene is skipped.
 
 ## ⚠️ Free Tier Notes
 

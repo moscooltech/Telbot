@@ -285,8 +285,27 @@ with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
           f"winners: pollinations-legacy ({config.IMAGE_LEGACY_MODEL}) x2" in summary,
           summary)
 
-print("== 7. klein multi-reference anchor ==")
-with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
+print("== 7. klein multi-reference anchor (opt-in: it clones scene 1 otherwise) ==")
+check("anchor is OFF by default so scenes keep their own frame",
+      config.ENABLE_IMAGE_ANCHOR is False, str(config.ENABLE_IMAGE_ANCHOR))
+with mock.patch.object(ig_mod, "CLOUDFLARE_ACCOUNT_ID", "acc"), \
+     mock.patch.object(ig_mod, "CLOUDFLARE_API_TOKEN", "tok"), \
+     mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
+     mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""), \
+     mock.patch.object(ig_mod, "ENABLE_IMAGE_ANCHOR", False), \
+     mock.patch.object(ig_mod.time, "sleep", lambda s: None), \
+     mock.patch.object(ig_mod.requests, "post", return_value=cf_json_response()) as _post_off:
+    _gen_off = make_gen()
+    _gen_off.generate_image("a fox in a forest", 0)
+    _gen_off.generate_image("a fox by a river", 1)
+    check("disabled -> no reference image offered to klein",
+          "files" not in _post_off.call_args.kwargs, str(list(_post_off.call_args.kwargs)))
+    check("disabled -> _use_anchor stays False and no anchor is remembered",
+          _gen_off._use_anchor is False and _gen_off.anchor_image_path is None,
+          str((_gen_off._use_anchor, _gen_off.anchor_image_path)))
+
+with mock.patch.object(ig_mod, "ENABLE_IMAGE_ANCHOR", True), \
+     mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
      mock.patch.object(ig_mod, "BYTEZ_API_KEY", ""), \
      mock.patch.object(ig_mod.time, "sleep", lambda s: None), \
      mock.patch.object(ig_mod.requests, "get", return_value=fake_response()):
@@ -294,8 +313,9 @@ with mock.patch.object(ig_mod, "POLLINATIONS_API_KEY", ""), \
     check("anchor unset before first image", gen.anchor_image_path is None, str(gen.anchor_image_path))
     gen.generate_image("a fox in a forest", 0)
     expected_anchor = os.path.join(TEMP_DIR, JOB, "images", "scene_000.jpg")
-    check("anchor set to first successful image",
+    check("enabled -> anchor set to first successful image",
           gen.anchor_image_path == expected_anchor, str(gen.anchor_image_path))
+    check("enabled -> photo scene is anchor-eligible", gen._use_anchor is True, str(gen._use_anchor))
 
     klein_model = config.CLOUDFLARE_KLEIN_MODELS[0]
     with mock.patch.object(ig_mod.requests, "post", return_value=cf_json_response()) as post_mock:
@@ -496,6 +516,31 @@ with mock.patch.object(sg_mod, "ENABLE_LLM_IMAGE_MODES", False):
     _sg._generate_scenes("topic", _spine, 1, 2)
 check("scene prompt drops the modes when disabled",
       "/decompose" not in _captured["sys"], _captured["sys"][:120])
+
+print("== 8h. every scene must be its own moment, not a re-render ==")
+_sg.llm = _CaptureLLM('{"prompts": ["p"]}')
+_sg._polish_visuals({"motive": "m", "style_bible": "s"}, [{"description": "d"}])
+_polish_sys = _captured["sys"]
+check("polish demands a DIFFERENT moment per scene",
+      "DIFFERENT moment" in _polish_sys, _polish_sys[:200])
+check("polish varies the shot list across scenes",
+      "wide establishing" in _polish_sys and "close-ups" in _polish_sys, _polish_sys[:200])
+check("polish forbids repeating the previous framing",
+      "never repeat the previous prompt's framing" in _polish_sys, _polish_sys[:200])
+
+_sg.llm = _CaptureLLM('{"scenes": [{"narration": "n", "description": "d"}], "caption": "c", "hashtags": []}')
+_sg._generate_scenes("topic", _spine, 1, 2)
+check("scene prompt asks for a NEW moment per scene",
+      "NEW moment" in _captured["sys"], _captured["sys"][:200])
+check("scene prompt still locks the look to the style bible",
+      "keeps this look" in _captured["sys"], _captured["sys"][:200])
+
+_sg.llm = _CaptureLLM('{"motive": "m", "style_bible": "s", "beats": [], "hook": "", "cta": ""}')
+_sg._generate_spine("topic")
+check("spine stops pinning location/framing in the style bible",
+      "Never pin the location" in _captured["sys"], _captured["sys"][:200])
+check("spine still asks for a recurring look",
+      "recurring LOOK" in _captured["sys"], _captured["sys"][:200])
 
 shutil.rmtree(os.path.join(TEMP_DIR, JOB), ignore_errors=True)
 for _extra in ("verify_image_unit_art", "verify_image_unit_alias", "verify_image_unit_bad",

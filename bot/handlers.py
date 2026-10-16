@@ -297,6 +297,43 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error generating script: {str(e)}")
 
 
+def _drop_unvoiced_scenes(scenes, narrations):
+    """Pair each scene with its narration and drop the pairs with no narration.
+
+    Narration format only, and called BEFORE any image work: a scene with no
+    narration used to be dropped after its image was rendered, which shortened
+    the narration list and shifted every later scene onto the wrong image.
+    Dropping the pair up front keeps the two lists equal and index-stable (and
+    saves the image quota for the scene that was thrown away).
+
+    Returns ``(scenes, narrations)`` - same order, same length.
+    """
+    kept = [(s, n) for s, n in zip(scenes, narrations) if (n or "").strip()]
+    return [s for s, _ in kept], [n for _, n in kept]
+
+
+def _picked_pairs(scenes, narrations, generated):
+    """Index-stable pairing of rendered images with their own scene and narration.
+
+    ``generated`` is ``[(scene_index, image_path)]`` in generation order, so a
+    scene whose image failed is SKIPPED rather than shifting every later scene.
+    Appending successful paths into a bare list instead would give the clip
+    after a failure the image of a LATER scene (with that scene's narration and
+    subtitles), which reads as "the images don't match the scenes".
+
+    Returns ``(image_paths, scene_texts, narration_texts)`` - one entry per
+    successfully rendered scene, all three lists the same length.
+    """
+    image_paths, scene_texts, narration_texts = [], [], []
+    for idx, path in generated:
+        image_paths.append(path)
+        scene_texts.append(scenes[idx] if isinstance(idx, int) and 0 <= idx < len(scenes) else "")
+        narration_texts.append(
+            narrations[idx] if isinstance(idx, int) and 0 <= idx < len(narrations) else ""
+        )
+    return image_paths, scene_texts, narration_texts
+
+
 def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_format, series_ctx=None):
     """
     Synchronous background function that uses pre-approved scenes and narrations.
@@ -336,6 +373,18 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 text=_status_text(f"🖼️ **Step 2/5:** Generated {len(scenes)} scenes.\nCreating high-quality images...")
             )
 
+        # Narration format only: drop scenes that carry no narration BEFORE any
+        # image work, so a skipped scene costs nothing and can never shift the
+        # pairing between a scene, its image and its narration.
+        if video_format == "narration":
+            before = len(scenes)
+            scenes, narrations = _drop_unvoiced_scenes(scenes, narrations)
+            if len(scenes) != before:
+                logger.warning("Job %s: skipping %s scene(s) with no narration.",
+                               job_id, before - len(scenes))
+            if not scenes:
+                raise Exception("No narrations received from AI")
+
         # --- PHASE 2: IMAGES (with job-wide style bible for visual coherence) ---
         # default_mode is the job-wide render style from an inline "/mode"
         # directive on the prompt; scene descriptions may override it per image.
@@ -344,12 +393,14 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             style_bible=metadata.get("style_bible", ""),
             default_mode=metadata.get("image_mode"),
         )
-        image_paths = []
+        # Keep (scene_index, path) pairs: a failed scene must NOT shift the
+        # pairing between a scene, its image, its narration and its subtitles.
+        generated = []
         failed_scenes = 0
         for i, scene in enumerate(scenes):
             path = ig.generate_image(scene, i)
             if path:
-                image_paths.append(path)
+                generated.append((i, path))
             else:
                 failed_scenes += 1
             # Update progress occasionally
@@ -359,6 +410,10 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                     message_id=status_msg_id,
                     text=_status_text(f"🖼️ **Step 2/5:** Creating images... ({i + 1}/{len(scenes)})")
                 )
+
+        # Align image / scene / narration by original scene index (drops only the
+        # scenes that truly have no image).
+        image_paths, picked_scenes, picked_narrations = _picked_pairs(scenes, narrations, generated)
 
         # Degrade gracefully: a job can lose some scenes and still ship a good video.
         if not image_paths:
@@ -395,19 +450,21 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
         word_timings_data = []  # one entry per narration (list of {text,start,end} or None)
 
         if video_format == "narration":
-            # Ensure unique narrations per scene
+            # Ensure unique narrations per scene. Every scene keeps its SLOT even
+            # when the text is empty or a duplicate (an empty slot is reported by
+            # the validation below), so narration[i] always belongs to image[i].
             unique_narrations = []
             seen = set()
-            for n in narrations[:len(image_paths)]:
+            for n in picked_narrations:
+                n = (n or "").strip()
                 if n and n not in seen:
                     unique_narrations.append(n)
                     seen.add(n)
                 elif n:
                     # Add a variation if repeated
                     unique_narrations.append(f"{n} (part {len(unique_narrations)+1})")
-
-            # Keep narrations aligned 1:1 with the images that were actually produced
-            unique_narrations = unique_narrations[:len(image_paths)]
+                else:
+                    unique_narrations.append(n)
 
             # Validate narrations before generating audio
             if not unique_narrations:
@@ -489,8 +546,8 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             text_for_video_overlay = unique_narrations
             srt_text_source = unique_narrations[:len(image_paths)]
         else:  # video_format == "description"
-            text_for_video_overlay = scenes  # Use the scene descriptions
-            srt_text_source = scenes[:len(image_paths)]
+            text_for_video_overlay = picked_scenes  # Use the scene descriptions
+            srt_text_source = picked_scenes[:len(image_paths)]
 
         # Ensure text_for_video_overlay matches image_paths length
         if len(text_for_video_overlay) > len(image_paths):

@@ -471,6 +471,46 @@ check("/gen rejects a bare directive",
       any("style directive" in t for t in _update_bare.message.texts),
       str(_update_bare.message.texts))
 
+print("== 10. scene / image / narration pairing stays index-aligned ==")
+from bot.handlers import _picked_pairs, _drop_unvoiced_scenes
+
+_scenes = ["s0", "s1", "s2", "s3"]
+_narrs = ["n0", "n1", "n2", "n3"]
+
+# The regression: image 1 failed, so image 2's path must NOT slide onto scene 1.
+_paths, _sc, _na = _picked_pairs(_scenes, _narrs, [(0, "img0"), (2, "img2"), (3, "img3")])
+check("failed image does not shift the pairing",
+      (_paths, _sc, _na) == (["img0", "img2", "img3"], ["s0", "s2", "s3"], ["n0", "n2", "n3"]),
+      str((_paths, _sc, _na)))
+check("pairing lists are the same length",
+      len(_paths) == len(_sc) == len(_na) == 3, str((len(_paths), len(_sc), len(_na))))
+
+# Order of `generated` is what the clip order follows - it must survive as-is.
+_paths2, _sc2, _na2 = _picked_pairs(["a", "b"], ["na", "nb"], [(1, "b_img"), (0, "a_img")])
+check("pairs follow generation order",
+      (_paths2, _sc2, _na2) == (["b_img", "a_img"], ["b", "a"], ["nb", "na"]),
+      str((_paths2, _sc2, _na2)))
+
+# Defensive: a short narration/scene list must not raise or mispair.
+_paths3, _sc3, _na3 = _picked_pairs(["only"], [], [(0, "p")])
+check("missing narration becomes an empty slot",
+      (_paths3, _sc3, _na3) == (["p"], ["only"], [""]), str((_paths3, _sc3, _na3)))
+_paths4, _sc4, _na4 = _picked_pairs([], [], [(3, "p")])
+check("out-of-range index yields empty text, keeps the image",
+      (_paths4, _sc4, _na4) == (["p"], [""], [""]), str((_paths4, _sc4, _na4)))
+
+# Unvoiced scenes are dropped as PAIRS (before any image is rendered).
+_sc, _na = _drop_unvoiced_scenes(["s0", "s1", "s2"], ["n0", "", "n2"])
+check("empty narration drops its scene too", (_sc, _na) == (["s0", "s2"], ["n0", "n2"]),
+      str((_sc, _na)))
+_sc, _na = _drop_unvoiced_scenes(["s0", "s1", "s2"], ["n0", "n1"])
+check("narration shorter than scenes drops the extras", (_sc, _na) == (["s0", "s1"], ["n0", "n1"]),
+      str((_sc, _na)))
+_sc, _na = _drop_unvoiced_scenes(["s0", "s1"], ["n0", "n1"])
+check("all-voiced input is untouched", (_sc, _na) == (["s0", "s1"], ["n0", "n1"]), str((_sc, _na)))
+_sc, _na = _drop_unvoiced_scenes(["s0", "s1"], ["", "  "])
+check("all-unvoiced input yields empty lists", (_sc, _na) == ([], []), str((_sc, _na)))
+
 print("")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

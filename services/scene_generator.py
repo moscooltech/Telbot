@@ -137,7 +137,7 @@ class SceneGenerator:
             "Return JSON ONLY:\n"
             "{\n"
             '  "motive": "one sentence: the core message/purpose of the video",\n'
-            '  "style_bible": "one line: recurring visual identity (main subject/character, setting, art style, lighting, color palette) shared by ALL scenes. Prefer a photorealistic documentary/photo style unless the topic clearly needs otherwise",\n'
+            '  "style_bible": "one line: the recurring LOOK shared by ALL scenes - art style, color palette, lighting, lens/film character - plus, only if the video follows one person throughout, that person\'s identity (age, build, clothing, hair). Never pin the location, the framing or the camera here: every scene is its own moment, place and shot",\n'
             '  "beats": ["beat 1 summary", "beat 2 summary", "beat 3 summary", "beat 4 summary"],\n'
             '  "hook": "opening hook concept",\n'
             '  "cta": "closing call-to-action concept"\n'
@@ -201,16 +201,17 @@ class SceneGenerator:
             "You are a Professional AI Video Producer. Write the full script using the story spine below.\n\n"
             "STORY SPINE\n"
             f"Motive: {spine['motive']}\n"
-            f"Visual style bible (ALL scenes must reuse this): {spine['style_bible'] or 'invent one consistent style'}\n"
+            f"Visual style bible (every scene keeps this look): {spine['style_bible'] or 'invent one consistent style'}\n"
             f"Beat structure: {beats}\n"
             f"Opening hook: {spine['hook']}\n"
             f"Closing call to action: {spine['cta']}\n\n"
             "Requirements:\n"
             f"- Write a UNIQUE narration for EACH of the {min_s} to {max_s} scenes.\n"
+            "- Each scene is a NEW moment: move the action forward, and change the location and the camera angle from the previous scene. Never re-describe the picture you just used.\n"
             "- Every scene MUST clearly serve the motive above. Never drift off-topic.\n"
             "- Follow the beat structure: scene 1 is the hook, the last scene is the call to action.\n"
             '- "narration": 20-30 words of natural spoken text, proper grammar/punctuation, no "scene N"/"step N" numbering.\n'
-            '- "description": a vivid image-generation prompt. It MUST reuse the same subject/setting/style as the style bible so all scenes look like one video.\n'
+            '- "description": a vivid image-generation prompt for THIS scene\'s own moment. Keep the style bible\'s look, but its subject, place and shot must differ from every other scene; repeat the same character description only while the narration is really about that character.\n'
             + mode_rule
             + '- "caption": a complete, natural social-media post caption for the finished video: '
             f'AT LEAST 200 characters (aim for 250-400) and 3-5 sentences, describing what the video '
@@ -261,7 +262,7 @@ class SceneGenerator:
             "Weak scene to rewrite:\n"
             f"narration: {scenes[idx].get('narration', '')}\n"
             f"description: {scenes[idx].get('description', '')}\n\n"
-            "Requirements: 20-30 words narration, no numbering, description reuses the style bible.\n"
+            "Requirements: 20-30 words narration, no numbering, and a description that keeps the style bible's look while showing a DIFFERENT moment, place and camera shot from the neighbouring scenes.\n"
             'Output JSON ONLY: {"narration": "...", "description": "..."}'
         )
         content = self.llm.generate_text(
@@ -274,22 +275,25 @@ class SceneGenerator:
         Prompt-engineering pass: rewrite every scene description into a
         structured image prompt (subject -> action -> setting -> shot ->
         lighting -> style), locked to the style bible so all images
-        look like one coherent video. The LLM may also attach ONE render-mode
+        look like one coherent video - while still giving each scene its own
+        moment, place and camera shot, so the video never becomes one frame
+        re-rendered. The LLM may also attach ONE render-mode
         directive to the scenes that are not meant to be photographs.
         """
         mode_help = mode_directive_help()
-        mode_rule = ("6. " + mode_help + "\n") if mode_help else ""
+        mode_rule = ("7. " + mode_help + "\n") if mode_help else ""
         system_prompt = (
             "You are an expert prompt engineer for text-to-image models (Flux, SDXL).\n"
             "For each numbered scene description below, rewrite it into ONE polished image prompt.\n\n"
-            f"Style bible (keep this identity in EVERY prompt): {spine['style_bible'] or 'invent one consistent style and reuse it'}\n"
+            f"Style bible (keep this look in EVERY prompt): {spine['style_bible'] or 'invent one consistent style and reuse it'}\n"
             "Motive (what the video is about): " + spine["motive"] + "\n\n"
             "Rules for each prompt:\n"
             "1. One line, comma-separated layers in this order: main subject with concrete details, action/pose, setting/environment, camera shot (e.g. close-up, wide establishing shot, low angle), lighting, art style/mood.\n"
-            "2. Reuse the same main character/subject description across ALL scenes so they look like the same video.\n"
-            "3. Visual, concrete language only: no abstract ideas, no narration, no 'scene N'. Keep words and labels out of photorealistic prompts - they render as garbage.\n"
-            "4. 25-45 words. No quotes. No trailing period.\n"
-            "5. Every prompt must VISUALIZE the topic, not just show a generic person: include the concrete objects, machinery, data displays or environments the scene is actually about (e.g. for an electricity bill topic: smart meter, AC unit, glowing watt meter, utility bill, power lines, wiring, appliance energy use). A person may appear only while interacting with those objects.\n"
+            "2. Every prompt is a DIFFERENT moment of the story: change the place, the action and the camera shot between scenes. Describe the same character identically ONLY while that character is really in the scene, and never repeat the previous prompt's framing or composition.\n"
+            "3. Vary the shot list on purpose: across the whole set use a mix of wide establishing shots, medium shots and close-ups, and give consecutive scenes different angles (low, high, over-the-shoulder, detail insert).\n"
+            "4. Visual, concrete language only: no abstract ideas, no narration, no 'scene N'. Keep words and labels out of photorealistic prompts - they render as garbage.\n"
+            "5. 25-45 words. No quotes. No trailing period.\n"
+            "6. Every prompt must VISUALIZE the topic, not just show a generic person: include the concrete objects, machinery, data displays or environments the scene is actually about (e.g. for an electricity bill topic: smart meter, AC unit, glowing watt meter, utility bill, power lines, wiring, appliance energy use). A person may appear only while interacting with those objects.\n"
             + mode_rule
             + "\n"
             "Scene descriptions:\n"

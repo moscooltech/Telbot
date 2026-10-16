@@ -107,13 +107,14 @@ IMAGE_NEGATIVE_CORE = (
 )
 
 # mode -> {"style": positive-prompt suffix, "negative": provider negative prompt,
-#          "anchor": use the job's first image as the klein multi-reference input}
+#          "anchor": may reuse the job's first image as the klein multi-reference
+#                    input - also requires ENABLE_IMAGE_ANCHOR (see below)}
 IMAGE_MODES = {
     # Default mode == exactly the pre-mode behavior (photo suffix + photo negatives).
     "photo": {
         "style": IMAGE_STYLE_SUFFIX,
         "negative": IMAGE_NEGATIVE_PROMPT,
-        "anchor": True,      # keeps the main character/look consistent across scenes
+        "anchor": True,      # same character, in every scene (ENABLE_IMAGE_ANCHOR)
     },
     "illustration": {
         "style": (
@@ -123,7 +124,7 @@ IMAGE_MODES = {
         "negative": (
             IMAGE_NEGATIVE_CORE + ", photograph, photorealistic, photo, 3d render, cgi"
         ),
-        "anchor": True,      # same character, drawn
+        "anchor": True,      # same character, drawn (ENABLE_IMAGE_ANCHOR)
     },
     "design": {
         "style": (
@@ -190,6 +191,27 @@ IMAGE_MODE_ALIASES = {
 
 # Let the script LLM choose a non-photo mode when a scene needs one.
 ENABLE_LLM_IMAGE_MODES = os.getenv("ENABLE_LLM_IMAGE_MODES", "true").lower() == "true"
+
+# ---------------------------------------------------------------------------
+# Scene-to-scene visual variety
+# ---------------------------------------------------------------------------
+# Two consistency mechanisms, working together, used to flatten a video into
+# ONE frame edited over and over:
+#   1. the "klein anchor" - the job's first image was sent to FLUX.2 klein as a
+#      multi-reference input (input_image_0) for every later scene. On a 4-step
+#      distilled model a reference image outranks the text prompt, so scenes 2..N
+#      came back as near-copies of scene 1 with small changes instead of their
+#      own moment.
+#   2. the style bible + "reuse the same subject" rules in the script prompts -
+#      they hold the look together, but said nothing about each scene needing its
+#      own moment, location and camera shot (now required - see
+#      services/scene_generator.py).
+# (1) is therefore opt-in: it is the right tool for a character-driven video
+# where one person must look identical in every scene, and the wrong one for a
+# topical video - and the pipeline cannot guess which it is. Non-photo modes
+# (design/decompose/diagram/poster) never use it either way.
+#   ENABLE_IMAGE_ANCHOR=true   -> pass the first image to every later klein scene
+ENABLE_IMAGE_ANCHOR = os.getenv("ENABLE_IMAGE_ANCHOR", "false").lower() == "true"
 
 # Default Models (verified September 2026)
 # NOTE: Llama 3.3 70B left Groq's free tier on 2026-08-16 -> gpt-oss-120b is the free replacement.
