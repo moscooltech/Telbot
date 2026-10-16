@@ -529,6 +529,33 @@ check("all-voiced scenes are untouched",
 _imgs, _narrs, _audio = _drop_silent_scenes(["i0"], ["n0"], [(None, 0, None)])
 check("all-silent scenes are dropped", (_imgs, _narrs, _audio) == ([], [], []), str((_imgs, _narrs, _audio)))
 
+print("== 10b. unvoiced-scene policy: keep the beat (silence) vs drop it ==")
+import subprocess as _subprocess
+from services.audio_processor import AudioProcessor
+
+check("unvoiced scenes are kept silent by default", config.SILENT_AUDIO_FALLBACK is True,
+      str(config.SILENT_AUDIO_FALLBACK))
+check("duration estimate is ~150 wpm", AudioProcessor.estimate_duration("x" * 150) == 10.0,
+      str(AudioProcessor.estimate_duration("x" * 150)))
+check("short line gets the 3s floor", AudioProcessor.estimate_duration("hi") == 3.0)
+check("empty line gets the 3s floor", AudioProcessor.estimate_duration("") == 3.0)
+check("None line gets the 3s floor", AudioProcessor.estimate_duration(None) == 3.0)
+
+if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+    _sil_job = "verify_silence_probe"
+    _sil = AudioProcessor(_sil_job).generate_silence(4.5, 3)
+    _dur = None
+    if _sil and os.path.exists(_sil) and os.path.getsize(_sil) > 0:
+        _dur = float(_subprocess.check_output([
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", _sil,
+        ]).decode().strip())
+    check("silence filler is a real, correctly sized mp3",
+          _dur is not None and abs(_dur - 4.5) < 0.3, f"path={_sil} dur={_dur}")
+    shutil.rmtree(os.path.join(TEMP_DIR, _sil_job), ignore_errors=True)
+else:
+    print("  SKIP silence filler check (ffmpeg/ffprobe not available in this environment)")
+
 print("")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

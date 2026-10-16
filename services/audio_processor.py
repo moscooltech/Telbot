@@ -8,7 +8,7 @@ import edge_tts
 from gtts import gTTS
 
 from config import (
-    TEMP_DIR, AUDIO_SAMPLE_RATE, ENABLE_LOUDNORM,
+    TEMP_DIR, AUDIO_SAMPLE_RATE, AUDIO_BITRATE, ENABLE_LOUDNORM,
     TTS_VOICE, TTS_RATE, TTS_VOLUME, ENABLE_PIPER, PIPER_VOICE_PATH,
 )
 
@@ -55,6 +55,38 @@ class AudioProcessor:
     def _run_ffmpeg(self, cmd):
         result = subprocess.run(cmd, capture_output=True)
         return result
+
+    @staticmethod
+    def estimate_duration(text):
+        """Rough spoken length of a line in seconds (~150 wpm) - used both as the
+        ffprobe fallback and to size the silence filler for an unvoiced scene."""
+        return max(3.0, len(text or "") / 15.0)
+
+    def generate_silence(self, duration, index):
+        """Write an mp3 of pure silence for a scene whose TTS failed.
+
+        Keeping the scene (silent) preserves the script: its picture and karaoke
+        subtitles still play, and the concatenated narration track stays aligned
+        with the clips. Returns None when ffmpeg cannot produce the file, in which
+        case the caller drops the scene instead.
+        """
+        filepath = os.path.join(self.audio_dir, f"scene_{index:03d}_silence.mp3")
+        cmd = [
+            "ffmpeg", "-y", "-f", "lavfi",
+            "-i", f"anullsrc=r={AUDIO_SAMPLE_RATE}:cl=mono",
+            "-t", f"{max(1.0, float(duration)):.2f}",
+            "-c:a", "libmp3lame", "-b:a", AUDIO_BITRATE, filepath,
+        ]
+        try:
+            result = self._run_ffmpeg(cmd)
+            if result.returncode == 0 and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                logger.info("Generated %.1fs of silence for unvoiced scene %s.", duration, index)
+                return filepath
+            logger.warning("Silence generation failed for scene %s: %s",
+                           index, (result.stderr or b"")[:200])
+        except Exception as e:
+            logger.warning("Silence generation error for scene %s: %s", index, e)
+        return None
 
     def generate_single_narration(self, text, index):
         """
@@ -118,7 +150,7 @@ class AudioProcessor:
                 ]).decode().strip()
                 duration = float(output)
             except Exception:
-                duration = max(3.0, len(text) / 15.0)
+                duration = self.estimate_duration(text)
 
             # Normalizing per scene keeps loudness consistent when clips are concatenated
             if ENABLE_LOUDNORM:

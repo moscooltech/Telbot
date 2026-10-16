@@ -266,6 +266,16 @@ ASPECT_RATIO = "9:16"               # TikTok format
 # the job aborts with a clear message instead of shipping a mostly-broken video.
 IMAGE_MIN_SUCCESS_RATIO = 0.5
 
+# What to do with a scene whose NARRATION could not be voiced (edge-tts, Piper and
+# gTTS all failed, twice): keeping the scene with a silent gap of its estimated
+# spoken length keeps the video complete according to the script - the clip, its
+# picture and its karaoke subtitles still play and the audio stays in sync - at
+# the cost of a few seconds without voice. Setting this to false drops the scene
+# instead (continuous voice, one beat of the story missing).
+# A scene whose IMAGE failed is always dropped: there is no picture to show, and
+# reusing another scene's image is what made the pictures look wrong before.
+SILENT_AUDIO_FALLBACK = os.getenv("SILENT_AUDIO_FALLBACK", "true").lower() == "true"
+
 # Scene alignment (story spine + relevance self-check)
 ENABLE_RELEVANCE_CHECK = True
 RELEVANCE_MIN_SCORE = 7             # scenes scoring below this get one rewrite against the motive

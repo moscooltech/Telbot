@@ -101,7 +101,16 @@ Coherence and variety are two different things, and getting the balance wrong is
 - **Each scene is its own moment.** The script LLM must move the story forward and change the **place, action and camera shot** between scenes, and the prompt-polish pass must vary the shot list (wide establishing → medium → close-up) instead of re-describing the previous frame. The style bible pins the *look* (art style, palette, lighting, lens) — never the location or the framing.
 - **The klein reference image is OFF by default.** `ENABLE_IMAGE_ANCHOR=false` (default) sends no reference image, so every scene is generated from its own prompt. Set `ENABLE_IMAGE_ANCHOR=true` only for a character-driven video where one person must look identical in every scene — on a 4-step distilled model like FLUX.2 klein a reference image outranks the text prompt, which is exactly what makes later scenes come back as near-copies of scene 1.
 
-Scene ↔ image ↔ narration pairing is **index-stable**: a scene is only kept if both its image and its narration rendered. A failed image (or a failed TTS line) drops that whole scene — image, clip, narration audio, subtitles — instead of shifting every later scene onto the previous scene's image and the next scene's duration/subtitle timings. The prompt-polish pass also sees each scene's narration, so the image presents what that scene actually says.
+Scene ↔ image ↔ narration pairing is **index-stable**: a scene is only kept if both its image and its narration rendered, so a failure never shifts later scenes onto the previous scene's image or the next scene's duration/subtitle timings.
+
+**When something fails, the scene is retried before anything is dropped:**
+
+| Failure | What happens |
+|---|---|
+| Image failed (whole provider chain, twice) | Scene dropped with its narration and subtitles — there is no picture to show, and reusing another scene's image is what made videos look wrong. Below `IMAGE_MIN_SUCCESS_RATIO` (0.5) the job aborts instead of shipping a chopped story. |
+| Narration failed | Retried once (edge-tts → Piper → gTTS), because a TTS hiccup is transient. If it still fails, `SILENT_AUDIO_FALLBACK=true` (default) keeps the scene with a silence gap of its estimated spoken length, so the video stays **complete according to the script** and audio stays in sync; set it to `false` to drop the scene instead (continuous voice, one beat missing). |
+
+The completion message reports every skipped or silent scene.
 
 ## 📺 Content Series (Queue + Auto-Schedule)
 
@@ -153,7 +162,7 @@ After `/series schedule`, the bot asks whether to **generate the next prompt now
 - Background music: drop `.mp3` files in `assets/music/` (mixed at 30% volume).
 - **Content series**: state + scheduler in `services/series_manager.py` / `series_scheduler.py`; the run loop reuses the same `SceneGenerator` + `run_generation_sync` pipeline as `/gen`.
 - **Image styles**: one source of truth — `IMAGE_MODES` / `IMAGE_MODE_ALIASES` in `config.py` (style suffix, negative prompt and klein-anchor flag per mode); `parse_image_mode()` in `services/image_generator.py` resolves a mode per scene (`ImageGenerator._resolve_mode`), and `services/scene_generator.py` tells the script LLM it may emit a directive.
-- **Scene variety**: `ENABLE_IMAGE_ANCHOR` (default `false`) decides whether the job's first image is reused as a klein reference; `services/scene_generator.py` requires a distinct moment/place/shot per scene. `bot/handlers.py::_picked_pairs` / `_drop_unvoiced_scenes` keep scene ↔ image ↔ narration index-aligned when a scene is skipped.
+- **Scene variety**: `ENABLE_IMAGE_ANCHOR` (default `false`) decides whether the job's first image is reused as a klein reference; `services/scene_generator.py` requires a distinct moment/place/shot per scene. `bot/handlers.py::_picked_pairs` / `_drop_unvoiced_scenes` / `_drop_silent_scenes` keep scene ↔ image ↔ narration index-aligned when a scene is skipped, and `SILENT_AUDIO_FALLBACK` decides whether an unvoiced scene is kept silent (complete script) or dropped.
 
 ## ⚠️ Free Tier Notes
 

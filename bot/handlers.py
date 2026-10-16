@@ -468,6 +468,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
         narration_paths = []
         durations = []
         word_timings_data = []  # one entry per narration (list of {text,start,end} or None)
+        kept_silent = dropped_silent = 0  # voice-failure policy counters (see below)
 
         if video_format == "narration":
             # Ensure unique narrations per scene. Every scene keeps its SLOT even
@@ -503,9 +504,9 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             if unique_count < len(unique_narrations) * 0.7:  # At least 70% should be unique
                 raise Exception("AI Director returned repetitive narrations. Retrying...")
 
-            # Collect the audio PER SCENE (scene order), so a scene that could
-            # not be voiced can be dropped together with its image instead of
-            # shifting every later clip's duration, subtitles and audio.
+            # Collect the audio PER SCENE (scene order) and retry a failed line
+            # once: a TTS network hiccup is transient, and a retried line keeps
+            # the scene - and therefore that beat of the script - in the video.
             num_narrations = len(unique_narrations)
             scene_audio = []  # [(path, duration, word_timings)] in scene order
             for i, narration_text in enumerate(unique_narrations):
@@ -515,17 +516,41 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                         message_id=status_msg_id,
                         text=_status_text(f"🎙️ **Step 3/5:** Generating AI narration... ({i+1}/{num_narrations})")
                     )
-                scene_audio.append(ap.generate_single_narration(narration_text, i))
+                audio = ap.generate_single_narration(narration_text, i)
+                if not audio[0]:
+                    logger.warning("Narration %s/%s failed; retrying once.", i + 1, num_narrations)
+                    audio = ap.generate_single_narration(narration_text, i)
+                scene_audio.append(audio)
 
             if not any(audio[0] for audio in scene_audio):  # Only raise if narration expected
                 raise Exception("Failed to generate narration files.")
 
+            # A line that is STILL silent after the retry: keep the scene with a
+            # silence filler of its estimated spoken length (the story keeps every
+            # beat, and the clip, its picture and its subtitles stay in sync), or
+            # - when SILENT_AUDIO_FALLBACK is off - drop it with its image.
+            kept_silent = dropped_silent = 0
+            for i, audio in enumerate(scene_audio):
+                if audio[0]:
+                    continue
+                if config.SILENT_AUDIO_FALLBACK:
+                    dur = ap.estimate_duration(unique_narrations[i])
+                    silence = ap.generate_silence(dur, i)
+                    if silence:
+                        # No word timings: the subtitles fall back to estimated
+                        # karaoke timing across the silent gap.
+                        scene_audio[i] = (silence, dur, None)
+                        kept_silent += 1
+                        continue
+                dropped_silent += 1
+                logger.warning("Dropping scene %s of job %s: no narration audio.", i + 1, job_id)
+
             image_paths, unique_narrations, scene_audio = _drop_silent_scenes(
                 image_paths, unique_narrations, scene_audio
             )
-            if len(scene_audio) < num_narrations:
-                logger.warning("Job %s: skipping %s scene(s) with failed narration.",
-                               job_id, num_narrations - len(scene_audio))
+            if dropped_silent:
+                logger.warning("Job %s: skipped %s scene(s) with failed narration.",
+                               job_id, dropped_silent)
             narration_paths = [audio[0] for audio in scene_audio]
             durations = [audio[1] for audio in scene_audio]
             word_timings_data = [audio[2] for audio in scene_audio]
@@ -648,6 +673,10 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             done_lines.append(f"🖼️ {image_summary}")
             if failed_scenes:
                 done_lines.append(f"⚠️ {failed_scenes} scene(s) skipped (image failures).")
+            if kept_silent:
+                done_lines.append(f"🔇 {kept_silent} scene(s) had no voice — kept silent to stay complete.")
+            if dropped_silent:
+                done_lines.append(f"⚠️ {dropped_silent} scene(s) skipped (narration failed).")
             TelegramAPI.edit_message(
                 chat_id=chat_id,
                 message_id=status_msg_id,
