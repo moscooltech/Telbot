@@ -556,6 +556,50 @@ if shutil.which("ffmpeg") and shutil.which("ffprobe"):
 else:
     print("  SKIP silence filler check (ffmpeg/ffprobe not available in this environment)")
 
+print("== 11. series scheduler boot (PTB 20 has no Bot.loop) ==")
+import asyncio as _asyncio
+import services.series_scheduler as _sch
+
+_saved_sched_loop = _sch._scheduler_loop
+_saved_sched_flag = _sch._scheduler_started
+
+async def _stub_scheduler_loop():
+    try:
+        await _asyncio.sleep(30)
+    except _asyncio.CancelledError:
+        raise
+
+try:
+    _sch._scheduler_loop = _stub_scheduler_loop
+    _sch._scheduler_started = False
+
+    async def _webhook_style_startup():
+        # Simulates app.py on_startup: a live loop + a bot_app object that (like
+        # PTB 20.x) has NO .loop attribute. Must not crash; must create the task.
+        _sch.start_scheduler(object())
+        _tasks = [t for t in _asyncio.all_tasks()
+                  if t.get_name() == "series-scheduler" and not t.done()]
+        check("scheduler task created on running loop", len(_tasks) == 1, str(_tasks))
+        for t in _tasks:
+            t.cancel()
+        await _asyncio.gather(*_tasks, return_exceptions=True)
+
+    _asyncio.run(_webhook_style_startup())
+    check("start_scheduler flags started", _sch._scheduler_started is True)
+    check("double start is idempotent",
+          _sch.start_scheduler(object()) is None and _sch._scheduler_started is True)
+
+    # Outside a running loop: must degrade gracefully (no exception, no started flag).
+    _sch._scheduler_started = False
+    try:
+        _sch.start_scheduler(object())
+        check("no running loop -> graceful no-start", _sch._scheduler_started is False)
+    except Exception as exc:
+        check("no running loop -> graceful no-start", False, repr(exc))
+finally:
+    _sch._scheduler_loop = _saved_sched_loop
+    _sch._scheduler_started = _saved_sched_flag
+
 print("")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

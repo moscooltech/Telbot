@@ -28,21 +28,26 @@ logger = logging.getLogger(__name__)
 _scheduler_started = False
 
 
-def start_scheduler(bot_app):
-    """Idempotently start the scheduler loop as an asyncio task on the bot's
-    event loop (webhook mode) or the running loop (polling mode)."""
+def start_scheduler(bot_app=None):
+    """Idempotently start the scheduler loop as an asyncio task on the current
+    (running) event loop. Both call sites — app.py's on_startup (webhook mode)
+    and main.py's main() (polling mode) — run inside a live asyncio loop, so
+    asyncio.get_running_loop() is the correct handle. NOTE: Bot.loop does NOT
+    exist in python-telegram-bot 20.x; reaching for bot_app.bot.loop here used
+    to raise AttributeError and silently kill the scheduler (auto runs never
+    fired)."""
     global _scheduler_started
     if _scheduler_started:
         return
     _scheduler_started = True
     try:
-        loop = bot_app.bot.loop if bot_app is not None else asyncio.get_event_loop()
-        loop.create_task(_scheduler_loop())
+        loop = asyncio.get_running_loop()
+        loop.create_task(_scheduler_loop(), name="series-scheduler")
         logger.info("📅 Series scheduler started (tick every %ss).",
                     SERIES_SCHEDULER_TICK_SECONDS)
-    except Exception as e:
+    except RuntimeError as e:
         _scheduler_started = False
-        logger.error("Failed to start series scheduler: %s", e)
+        logger.error("Failed to start series scheduler (no running loop): %s", e)
 
 
 async def _scheduler_loop():
