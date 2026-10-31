@@ -20,9 +20,7 @@ UNOROUTER_API_KEY = os.getenv("UNOROUTER_API_KEY", "")
 # tried in order (first that responds wins). Update here if a free model retires.
 UNOROUTER_MODELS = [
     m.strip() for m in os.getenv(
-        "UNOROUTER_MODELS",
-        "
-agnes-3.0-flash:free,gpt-5.5:free,deepseek-v4-flash:free"
+        "UNOROUTER_MODELS","agnes-3.0-flash:free,gpt-5.5:free,deepseek-v4-flash:free"
     ).split(",") if m.strip()
 ]
 
