@@ -21,7 +21,8 @@ UNOROUTER_API_KEY = os.getenv("UNOROUTER_API_KEY", "")
 UNOROUTER_MODELS = [
     m.strip() for m in os.getenv(
         "UNOROUTER_MODELS",
-        "gpt-5.4:free,gpt-5.5:free,deepseek-v4-flash:free"
+        "
+agnes-3.0-flash:free,gpt-5.5:free,deepseek-v4-flash:free"
     ).split(",") if m.strip()
 ]
 
