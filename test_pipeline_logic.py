@@ -630,6 +630,11 @@ check("every line is counted against the one engine used",
       _ap2.engine_usage == {_AP.ENGINE_GTTS: 2}, str(_ap2.engine_usage))
 shutil.rmtree(os.path.join(TEMP_DIR, "verify_voice_pin"), ignore_errors=True)
 
+import config as _config_mod
+check("whole-script voice retry is on by default",
+      _config_mod.RETRY_NARRATION_ON_FALLBACK is True,
+      str(_config_mod.RETRY_NARRATION_ON_FALLBACK))
+
 # loudnorm rewrites (and can pad) the file, so the clip length must be measured
 # AFTER it - measuring first made every scene drift behind its own narration.
 _order = []

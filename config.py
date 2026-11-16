@@ -304,6 +304,18 @@ TTS_VOLUME = os.getenv("TTS_VOLUME", "+0%")
 ENABLE_PIPER = os.getenv("ENABLE_PIPER", "false").lower() == "true"
 PIPER_VOICE_PATH = os.getenv("PIPER_VOICE_PATH", "")
 
+# A first narration pass that had to fall back to another TTS engine (Piper,
+# gTTS) is retried ONCE from the start with the configured voice, because the
+# usual cause is a transient edge-tts outage - and a fallback voice makes the
+# whole video sound like a different narrator. Every line is re-voiced, not just
+# the failed one, so the video is never half one voice and half another.
+#   true  = whole-script retry (costs one extra TTS pass in the rare fallback case)
+#   false = accept the fallback voice immediately (faster, voice may differ from
+#           the configured one - the completion message still reports it)
+RETRY_NARRATION_ON_FALLBACK = (
+    os.getenv("RETRY_NARRATION_ON_FALLBACK", "true").lower() == "true"
+)
+
 # Subtitles (ASS/libass karaoke rendering)
 SUBTITLE_WORDS_PER_CHUNK = int(os.getenv("SUBTITLE_WORDS_PER_CHUNK", "2"))
 SUBTITLE_FONT_SIZE = int(os.getenv("SUBTITLE_FONT_SIZE", "54"))
