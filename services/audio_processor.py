@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 
 
 class AudioProcessor:
+    # ONE video = ONE voice. These three engines sound like three different
+    # people, so the first line that renders pins the engine for the whole job:
+    # a scene-by-scene fallback (edge-tts on one line, gTTS on the next) is what
+    # made the narrator's voice change part-way through a video.
+    ENGINE_EDGE = "edge-tts"
+    ENGINE_PIPER = "piper"
+    ENGINE_GTTS = "gTTS"
+
     def __init__(self, job_id):
         self.job_id = job_id
         self.job_dir = os.path.join(TEMP_DIR, job_id)
@@ -23,6 +31,10 @@ class AudioProcessor:
         self.audio_dir = os.path.join(self.job_dir, "audio")
         os.makedirs(self.audio_dir, exist_ok=True)
         self.timings_path = os.path.join(self.audio_dir, "word_timings.json")
+        # Pinned by the first successful line; never changes for the rest of the job.
+        self.engine = None
+        # engine -> lines voiced, so a fallback voice is reported instead of silent.
+        self.engine_usage = {}
 
     async def _generate_edge_tts(self, text, filepath, voice=TTS_VOICE):
         """Generate audio with edge-tts while capturing real word-level timing events."""
@@ -62,6 +74,17 @@ class AudioProcessor:
         ffprobe fallback and to size the silence filler for an unvoiced scene."""
         return max(3.0, len(text or "") / 15.0)
 
+    def _probe_duration(self, filepath, text):
+        """Real audio length via ffprobe, falling back to the wpm estimate."""
+        try:
+            output = subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", filepath,
+            ]).decode().strip()
+            return float(output)
+        except Exception:
+            return self.estimate_duration(text)
+
     def generate_silence(self, duration, index):
         """Write an mp3 of pure silence for a scene whose TTS failed.
 
@@ -88,75 +111,119 @@ class AudioProcessor:
             logger.warning("Silence generation error for scene %s: %s", index, e)
         return None
 
-    def generate_single_narration(self, text, index):
+    # ------------------------------------------------------------------
+    # Engines - each one returns (path, word_timings) or raises
+    # ------------------------------------------------------------------
+    def _synthesize_edge(self, text, filepath):
+        """edge-tts with the configured TTS_VOICE (the intended voice)."""
+        words = asyncio.run(self._generate_edge_tts(text, filepath, TTS_VOICE))
+        if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+            raise Exception("edge-tts produced no audio")
+        return filepath, (words or None)
+
+    def _synthesize_piper(self, text, filepath):
+        """Optional offline Piper voice (ENABLE_PIPER + a .onnx model)."""
+        import shlex
+        wav_filepath = os.path.splitext(filepath)[0] + ".wav"
+        shell_cmd = (
+            f"echo {shlex.quote(text)} | piper --model "
+            f"{shlex.quote(PIPER_VOICE_PATH)} --output_file {shlex.quote(wav_filepath)}"
+        )
+        proc = subprocess.run(["bash", "-c", shell_cmd], capture_output=True, timeout=60)
+        if proc.returncode != 0 or not os.path.exists(wav_filepath) or os.path.getsize(wav_filepath) == 0:
+            raise Exception("piper failed: " + proc.stderr.decode()[:200])
+        conv = self._run_ffmpeg([
+            "ffmpeg", "-y", "-i", wav_filepath, "-codec:a", "libmp3lame",
+            "-b:a", AUDIO_BITRATE, filepath,
+        ])
+        if conv.returncode == 0 and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+            os.remove(wav_filepath)
+            return filepath, None
+        os.remove(filepath) if os.path.exists(filepath) else None
+        return wav_filepath, None  # keep the wav rather than lose the line
+
+    def _synthesize_gtts(self, text, filepath):
+        """gTTS - the keyless last resort, and a clearly different voice."""
+        gTTS(text=text, lang="en", slow=False).save(filepath)
+        if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+            raise Exception("gTTS produced no audio")
+        return filepath, None
+
+    def _chain(self, engine=None):
+        """(name, method) engines to try, in order.
+
+        A pinned engine is returned ALONE: falling through to another engine
+        part-way through a video is exactly what changed the voice after a scene.
+        With nothing pinned, the intended voice is tried first, then the optional
+        offline Piper voice, then gTTS.
         """
-        Generates a single narration file.
-        Returns (path, duration, word_timings) where word_timings is a list of
-        {"text", "start", "end"} dicts aligned to this file's audio, or None.
+        candidates = [(self.ENGINE_EDGE, self._synthesize_edge)]
+        if ENABLE_PIPER and PIPER_VOICE_PATH and os.path.exists(PIPER_VOICE_PATH):
+            candidates.append((self.ENGINE_PIPER, self._synthesize_piper))
+        candidates.append((self.ENGINE_GTTS, self._synthesize_gtts))
+        pinned = engine or self.engine
+        if pinned:
+            return [pair for pair in candidates if pair[0] == pinned]
+        return candidates
+
+    def voice_note(self):
+        """Completion-message line, and ONLY when the job did not use the
+        configured edge-tts voice for every line - a silent voice swap is what
+        makes a video sound like it has a second narrator."""
+        if not self.engine_usage or set(self.engine_usage) == {self.ENGINE_EDGE}:
+            return ""
+        parts = ", ".join(f"{name} x{count}" for name, count in
+                          sorted(self.engine_usage.items(), key=lambda kv: -kv[1]))
+        return f"🎙️ voice: {parts} (configured: {self.ENGINE_EDGE} / {TTS_VOICE})"
+
+    def generate_single_narration(self, text, index, engine=None):
+        """Generate one scene's narration.
+
+        ``engine`` pins the TTS engine for this line. The caller passes the job's
+        pinned engine (``self.engine``) for every line after the first, so the
+        voice stays the same from scene 1 to the last; ``None`` lets the first
+        line choose the best available engine.
+
+        Returns (path, duration, word_timings), or (None, 0, None) on failure.
         """
         try:
-            logger.info("Generating audio for index %s: '%s...'", index, text[:50])
+            pinned = engine or self.engine
+            logger.info("Generating audio for scene %s with %s: '%s...'",
+                        index, pinned or "auto", (text or "")[:50])
 
-            mp3_filepath = os.path.join(self.audio_dir, f"scene_{index:03d}.mp3")
-            word_timings = None
+            filepath = os.path.join(self.audio_dir, f"scene_{index:03d}.mp3")
+            if os.path.exists(filepath):
+                os.remove(filepath)
 
-            if os.path.exists(mp3_filepath):
-                os.remove(mp3_filepath)
-
-            try:
-                # edge-tts outputs mp3 natively; stream to file and capture WordBoundary events
-                words = asyncio.run(self._generate_edge_tts(text, mp3_filepath, TTS_VOICE))
-                if not os.path.exists(mp3_filepath) or os.path.getsize(mp3_filepath) == 0:
-                    raise Exception("edge-tts produced no audio")
-                if words:
-                    word_timings = words
-            except Exception as e:
-                logger.warning("edge-tts failed: %s, trying Piper fallback", e)
-
-                if ENABLE_PIPER and PIPER_VOICE_PATH and os.path.exists(PIPER_VOICE_PATH):
+            last_error = ""
+            for name, synthesize in self._chain(pinned):
+                # The AUTO line decides the job's voice, so give the preferred
+                # engine a second chance before settling for another voice.
+                for attempt in range(1, 2 if pinned else 3):
                     try:
-                        import shlex
-                        wav_filepath = os.path.join(self.audio_dir, f"scene_{index:03d}.wav")
-                        shell_cmd = f"echo {shlex.quote(text)} | piper --model {shlex.quote(PIPER_VOICE_PATH)} --output_file {shlex.quote(wav_filepath)}"
-                        proc = subprocess.run(["bash", "-c", shell_cmd], capture_output=True, timeout=60)
-                        if proc.returncode == 0 and os.path.exists(wav_filepath) and os.path.getsize(wav_filepath) > 0:
-                            # Convert wav to mp3 to keep the pipeline uniform
-                            conv = self._run_ffmpeg([
-                                "ffmpeg", "-y", "-i", wav_filepath, "-codec:a", "libmp3lame",
-                                "-b:a", AUDIO_BITRATE, mp3_filepath
-                            ])
-                            if conv.returncode == 0:
-                                os.remove(wav_filepath)
-                            else:
-                                mp3_filepath = wav_filepath  # use wav as-is
-                        else:
-                            raise Exception("piper failed: " + proc.stderr.decode()[:200])
-                    except Exception as pe:
-                        logger.warning("Piper fallback failed: %s, falling back to gTTS", pe)
-                        tts = gTTS(text=text, lang="en", slow=False)
-                        tts.save(mp3_filepath)
-                else:
-                    tts = gTTS(text=text, lang="en", slow=False)
-                    tts.save(mp3_filepath)
+                        path, word_timings = synthesize(text, filepath)
+                        if not os.path.exists(path) or os.path.getsize(path) == 0:
+                            raise Exception(f"{name} produced no audio")
 
-            if not os.path.exists(mp3_filepath):
-                raise Exception("Audio file not created after all TTS attempts")
+                        duration = self._probe_duration(path, text)
+                        # Normalizing per scene keeps loudness consistent when the
+                        # clips are concatenated.
+                        if ENABLE_LOUDNORM:
+                            self._loudnorm(path)
 
-            # Get duration using ffprobe (list-form argv, no shell)
-            try:
-                output = subprocess.check_output([
-                    "ffprobe", "-v", "error", "-show_entries", "format=duration",
-                    "-of", "default=noprint_wrappers=1:nokey=1", mp3_filepath
-                ]).decode().strip()
-                duration = float(output)
-            except Exception:
-                duration = self.estimate_duration(text)
+                        if self.engine is None:
+                            self.engine = name
+                            logger.info("Job %s: voice pinned to %s for the whole video.",
+                                        self.job_id, name)
+                        self.engine_usage[name] = self.engine_usage.get(name, 0) + 1
+                        return path, duration, word_timings
+                    except Exception as e:
+                        last_error = f"{name}: {e}"
+                        logger.warning("Scene %s: %s attempt %s failed: %s",
+                                       index, name, attempt, e)
 
-            # Normalizing per scene keeps loudness consistent when clips are concatenated
-            if ENABLE_LOUDNORM:
-                self._loudnorm(mp3_filepath)
-
-            return mp3_filepath, duration, word_timings
+            logger.error("Scene %s could not be voiced: %s", index, last_error)
+            return None, 0, None
 
         except Exception as e:
             logger.error("Failed to generate narration %s: %s", index, e)

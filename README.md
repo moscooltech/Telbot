@@ -108,9 +108,11 @@ Scene ↔ image ↔ narration pairing is **index-stable**: a scene is only kept 
 | Failure | What happens |
 |---|---|
 | Image failed (whole provider chain, twice) | Scene dropped with its narration and subtitles — there is no picture to show, and reusing another scene's image is what made videos look wrong. Below `IMAGE_MIN_SUCCESS_RATIO` (0.5) the job aborts instead of shipping a chopped story. |
-| Narration failed | Retried once (edge-tts → Piper → gTTS), because a TTS hiccup is transient. If it still fails, `SILENT_AUDIO_FALLBACK=true` (default) keeps the scene with a silence gap of its estimated spoken length, so the video stays **complete according to the script** and audio stays in sync; set it to `false` to drop the scene instead (continuous voice, one beat missing). |
+| Narration failed | Retried once **with the same voice** the video already uses, because a TTS hiccup is transient. If it still fails, `SILENT_AUDIO_FALLBACK=true` (default) keeps the scene with a silence gap of its estimated spoken length, so the video stays **complete according to the script** and audio stays in sync; set it to `false` to drop the scene instead (one beat missing). |
 
 The completion message reports every skipped or silent scene.
+
+**One video = one voice.** edge-tts, Piper and gTTS are three different-sounding narrators, so voicing a video scene-by-scene through a fallback chain made the voice change after a scene. The engine that voices the first line is now **pinned for the whole job** (`AudioProcessor.engine`): later lines are only ever sent to that same engine, and a pinned engine is never replaced mid-video. The fallback chain (edge-tts → Piper → gTTS) is used only to choose that first voice when it fails. If a different voice had to be used, the completion message says so (`🎙️ voice: …`) instead of swapping silently. A real conversation with multiple speakers would need per-speaker voices, which this single-narrator pipeline does not do.
 
 ## 📺 Content Series (Queue + Auto-Schedule)
 
@@ -158,6 +160,7 @@ After `/series schedule`, the bot asks whether to **generate the next prompt now
 - **Fonts**: the Docker image ships DejaVu fonts; libass resolves the bold face automatically. Drop a `.ttf` in `assets/fonts/` to override.
 - **RAM safety**: 720×1280 renders, 1 concurrent job, stream-copy assembly, per-clip 90–120s timeouts.
 - **Tuning**: `SUBTITLE_WORDS_PER_CHUNK` (2), `SUBTITLE_FONT_SIZE` (54), `SUBTITLE_MARGIN_V` (210), `TTS_RATE` (+5%) — see `.env.example`.
+- **Single voice**: `AudioProcessor.engine` pins one TTS engine per job (`bot/handlers.py` passes `engine=ap.engine` for every line); `voice_note()` is only non-empty when the configured edge-tts voice was not used for every line.
 - **Optional offline TTS**: set `ENABLE_PIPER=true` + `PIPER_VOICE_PATH` to add a Piper fallback between edge-tts and gTTS.
 - Background music: drop `.mp3` files in `assets/music/` (mixed at 30% volume).
 - **Content series**: state + scheduler in `services/series_manager.py` / `series_scheduler.py`; the run loop reuses the same `SceneGenerator` + `run_generation_sync` pipeline as `/gen`.

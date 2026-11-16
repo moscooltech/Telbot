@@ -516,10 +516,13 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                         message_id=status_msg_id,
                         text=_status_text(f"🎙️ **Step 3/5:** Generating AI narration... ({i+1}/{num_narrations})")
                     )
-                audio = ap.generate_single_narration(narration_text, i)
+                # ap.engine is None until a line renders, then holds the voice
+                # the whole video uses - so a fallback voice on scene 1 is never
+                # swapped back to edge-tts on scene 2 (or vice versa).
+                audio = ap.generate_single_narration(narration_text, i, engine=ap.engine)
                 if not audio[0]:
                     logger.warning("Narration %s/%s failed; retrying once.", i + 1, num_narrations)
-                    audio = ap.generate_single_narration(narration_text, i)
+                    audio = ap.generate_single_narration(narration_text, i, engine=ap.engine)
                 scene_audio.append(audio)
 
             if not any(audio[0] for audio in scene_audio):  # Only raise if narration expected
@@ -677,6 +680,9 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 done_lines.append(f"🔇 {kept_silent} scene(s) had no voice — kept silent to stay complete.")
             if dropped_silent:
                 done_lines.append(f"⚠️ {dropped_silent} scene(s) skipped (narration failed).")
+            voice_note = ap.voice_note()
+            if voice_note:
+                done_lines.append(voice_note)
             TelegramAPI.edit_message(
                 chat_id=chat_id,
                 message_id=status_msg_id,

@@ -556,6 +556,61 @@ if shutil.which("ffmpeg") and shutil.which("ffprobe"):
 else:
     print("  SKIP silence filler check (ffmpeg/ffprobe not available in this environment)")
 
+print("== 10c. one video = one voice (the TTS engine is pinned) ==")
+from services.audio_processor import AudioProcessor as _AP
+import services.audio_processor as _ap_mod
+
+_ap = _AP("verify_voice_chain")
+check("a fresh job has no pinned voice", _ap.engine is None, str(_ap.engine))
+check("the auto chain starts with the configured edge-tts voice",
+      _ap._chain()[0][0] == _AP.ENGINE_EDGE, str([n for n, _ in _ap._chain()]))
+check("the auto chain ends with the keyless gTTS voice",
+      _ap._chain()[-1][0] == _AP.ENGINE_GTTS, str([n for n, _ in _ap._chain()]))
+check("a pinned engine is returned alone (no mid-video voice swap)",
+      [n for n, _ in _ap._chain(_AP.ENGINE_GTTS)] == [_AP.ENGINE_GTTS],
+      str([n for n, _ in _ap._chain(_AP.ENGINE_GTTS)]))
+check("a pristine job has no voice note", _ap.voice_note() == "", _ap.voice_note())
+_ap.engine_usage = {_AP.ENGINE_EDGE: 3}
+check("edge-tts for every line is not reported", _ap.voice_note() == "", _ap.voice_note())
+_ap.engine_usage = {_AP.ENGINE_EDGE: 2, _AP.ENGINE_GTTS: 1}
+check("a fallback voice is reported in the completion message",
+      "gTTS" in _ap.voice_note(), _ap.voice_note())
+shutil.rmtree(os.path.join(TEMP_DIR, "verify_voice_chain"), ignore_errors=True)
+
+# The scenario that used to change the narrator mid-video: edge-tts fails, so
+# line 1 falls back to gTTS. Line 2 must then use gTTS too - not retry edge-tts
+# and quietly voice one scene in a different voice.
+_voice_calls = []
+
+
+def _edge_down(self, text, filepath):
+    _voice_calls.append("edge")
+    raise Exception("edge-tts down")
+
+
+def _gtts_ok(self, text, filepath):
+    _voice_calls.append("gtts")
+    with open(filepath, "wb") as _fh:
+        _fh.write(b"\xff\xfb" + b"\x00" * 400)   # non-empty => success
+    return filepath, None
+
+
+_ap2 = _AP("verify_voice_pin")
+with _mock.patch.object(_AP, "_synthesize_edge", _edge_down), \
+        _mock.patch.object(_AP, "_synthesize_gtts", _gtts_ok), \
+        _mock.patch.object(_AP, "_probe_duration", lambda self, p, t: 4.0), \
+        _mock.patch.object(_ap_mod, "ENABLE_LOUDNORM", False):
+    _line1 = _ap2.generate_single_narration("first line", 0)
+    _line2 = _ap2.generate_single_narration("second line", 1, engine=_ap2.engine)
+
+check("line 1 renders when edge-tts is down", bool(_line1[0]), str(_line1))
+check("the voice that voiced line 1 is pinned", _ap2.engine == _AP.ENGINE_GTTS, str(_ap2.engine))
+check("line 2 never retries the failed voice",
+      _voice_calls == ["edge", "edge", "gtts", "gtts"], str(_voice_calls))
+check("every line is counted against the one engine used",
+      _ap2.engine_usage == {_AP.ENGINE_GTTS: 2}, str(_ap2.engine_usage))
+shutil.rmtree(os.path.join(TEMP_DIR, "verify_voice_pin"), ignore_errors=True)
+
 print("== 11. series scheduler boot (PTB 20 has no Bot.loop) ==")
 import asyncio as _asyncio
 import services.series_scheduler as _sch
