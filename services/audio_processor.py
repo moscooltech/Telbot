@@ -176,6 +176,16 @@ class AudioProcessor:
                           sorted(self.engine_usage.items(), key=lambda kv: -kv[1]))
         return f"🎙️ voice: {parts} (configured: {self.ENGINE_EDGE} / {TTS_VOICE})"
 
+    def reset_voice(self):
+        """Forget the pinned voice so the next line chooses again.
+
+        Used to re-voice a WHOLE script when the first pass had to fall back to
+        a different engine: the fallback voice is a last resort, not the default,
+        so the configured voice gets one clean attempt at every line.
+        """
+        self.engine = None
+        self.engine_usage = {}
+
     def generate_single_narration(self, text, index, engine=None):
         """Generate one scene's narration.
 
@@ -205,11 +215,13 @@ class AudioProcessor:
                         if not os.path.exists(path) or os.path.getsize(path) == 0:
                             raise Exception(f"{name} produced no audio")
 
-                        duration = self._probe_duration(path, text)
-                        # Normalizing per scene keeps loudness consistent when the
-                        # clips are concatenated.
+                        # Normalize loudness FIRST: loudnorm rewrites (and can
+                        # pad/resample) the file, so probing before it measured a
+                        # duration the concatenated track would not have - the
+                        # clips then drifted ahead of their own narration.
                         if ENABLE_LOUDNORM:
                             self._loudnorm(path)
+                        duration = self._probe_duration(path, text)
 
                         if self.engine is None:
                             self.engine = name
@@ -278,9 +290,15 @@ class AudioProcessor:
 
             # Merge narrations first
             narration_merged_path = os.path.join(self.audio_dir, "narrations_merged.mp3")
+            # Re-encode instead of stream-copying: a job can mix segment formats
+            # (edge-tts 24 kHz, gTTS 32 kbps, silence filler 22050 Hz), and the
+            # concat demuxer with "-c copy" assumes every segment has identical
+            # codec parameters - it glitches or drifts when they differ, which
+            # pulls the narration out of sync with the clips.
             cmd_narration_merge = [
                 "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file_path,
-                "-c", "copy", narration_merged_path
+                "-ac", "1", "-ar", str(AUDIO_SAMPLE_RATE),
+                "-c:a", "libmp3lame", "-b:a", AUDIO_BITRATE, narration_merged_path
             ]
             result = self._run_ffmpeg(cmd_narration_merge)
             if result.returncode != 0:

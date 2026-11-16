@@ -312,6 +312,27 @@ def _drop_unvoiced_scenes(scenes, narrations):
     return [s for s, _ in kept], [n for _, n in kept]
 
 
+def _drop_duplicate_scenes(scenes, narrations):
+    """Drop repeated narration beats, with their scene, before any image work.
+
+    A duplicate narration means the script repeated itself: keeping the pair
+    would show a new picture while the viewer hears the previous sentence again.
+    The old workaround - appending " (part 2)" to the text - was read aloud by
+    TTS and then rejected by the scene-reference guard, failing the whole job.
+    Dropping the copy (and its image) keeps every other beat exactly as written.
+
+    Returns ``(scenes, narrations, dropped_count)``.
+    """
+    kept, seen = [], set()
+    for scene, narration in zip(scenes, narrations):
+        key = (narration or "").strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append((scene, narration))
+    return [s for s, _ in kept], [n for _, n in kept], len(scenes) - len(kept)
+
+
 def _drop_silent_scenes(image_paths, narrations, scene_audio):
     """Drop the scenes whose narration audio failed, image and text included.
 
@@ -393,15 +414,21 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 text=_status_text(f"🖼️ **Step 2/5:** Generated {len(scenes)} scenes.\nCreating high-quality images...")
             )
 
-        # Narration format only: drop scenes that carry no narration BEFORE any
-        # image work, so a skipped scene costs nothing and can never shift the
-        # pairing between a scene, its image and its narration.
+        # Narration format only: drop scenes that carry no narration and repeated
+        # beats BEFORE any image work, so a skipped scene costs nothing and can
+        # never shift the pairing between a scene, its image and its narration.
+        duplicate_scenes = 0
         if video_format == "narration":
             before = len(scenes)
             scenes, narrations = _drop_unvoiced_scenes(scenes, narrations)
             if len(scenes) != before:
                 logger.warning("Job %s: skipping %s scene(s) with no narration.",
                                job_id, before - len(scenes))
+            before = len(scenes)
+            scenes, narrations, duplicate_scenes = _drop_duplicate_scenes(scenes, narrations)
+            if duplicate_scenes:
+                logger.warning("Job %s: skipping %s duplicate narration scene(s).",
+                               job_id, duplicate_scenes)
             if not scenes:
                 raise Exception("No narrations received from AI")
 
@@ -471,21 +498,12 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
         kept_silent = dropped_silent = 0  # voice-failure policy counters (see below)
 
         if video_format == "narration":
-            # Ensure unique narrations per scene. Every scene keeps its SLOT even
-            # when the text is empty or a duplicate (an empty slot is reported by
-            # the validation below), so narration[i] always belongs to image[i].
-            unique_narrations = []
-            seen = set()
-            for n in picked_narrations:
-                n = (n or "").strip()
-                if n and n not in seen:
-                    unique_narrations.append(n)
-                    seen.add(n)
-                elif n:
-                    # Add a variation if repeated
-                    unique_narrations.append(f"{n} (part {len(unique_narrations)+1})")
-                else:
-                    unique_narrations.append(n)
+            # Narration text is used VERBATIM. The old workaround for a repeated
+            # line appended " (part 2)", which TTS read aloud and the
+            # scene-reference guard below then rejected, failing the whole job.
+            # Repeated beats are dropped as scene/narration pairs before any
+            # image is rendered, so nothing needs rewriting here.
+            unique_narrations = [(n or "").strip() for n in picked_narrations]
 
             # Validate narrations before generating audio
             if not unique_narrations:
@@ -499,31 +517,54 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 if scene_step_pattern.search(n):
                     raise Exception(f"Narration {idx+1} contains scene/step reference: '{n[:50]}...'")
 
-            # Check uniqueness (at least 70% should be unique)
-            unique_count = len(set(n.lower().strip() for n in unique_narrations if n))
-            if unique_count < len(unique_narrations) * 0.7:  # At least 70% should be unique
-                raise Exception("AI Director returned repetitive narrations. Retrying...")
+            # Duplicate beats were dropped as pairs before the images were
+            # rendered, and the script layer already enforces uniqueness when the
+            # LLM writes it, so the list here is unique by construction.
 
             # Collect the audio PER SCENE (scene order) and retry a failed line
             # once: a TTS network hiccup is transient, and a retried line keeps
             # the scene - and therefore that beat of the script - in the video.
             num_narrations = len(unique_narrations)
-            scene_audio = []  # [(path, duration, word_timings)] in scene order
-            for i, narration_text in enumerate(unique_narrations):
+
+            def _voice_lines():
+                """Voice every line in scene order, retrying a failed line once.
+
+                ``ap.engine`` is None until a line renders, then holds the voice
+                the whole video uses, so a fallback voice on scene 1 is never
+                swapped back to edge-tts on scene 2 (or vice versa).
+                """
+                voiced = []
+                for i, narration_text in enumerate(unique_narrations):
+                    if status_msg_id:
+                        TelegramAPI.edit_message(
+                            chat_id=chat_id,
+                            message_id=status_msg_id,
+                            text=_status_text(f"🎙️ **Step 3/5:** Generating AI narration... ({i+1}/{num_narrations})")
+                        )
+                    audio = ap.generate_single_narration(narration_text, i, engine=ap.engine)
+                    if not audio[0]:
+                        logger.warning("Narration %s/%s failed; retrying once.", i + 1, num_narrations)
+                        audio = ap.generate_single_narration(narration_text, i, engine=ap.engine)
+                    voiced.append(audio)
+                return voiced
+
+            scene_audio = _voice_lines()  # [(path, duration, word_timings)] in scene order
+            # A fallback voice is the last resort, not the default: if the whole
+            # first pass had to use another engine, a transient edge-tts outage
+            # is the likely cause, and one retried line cannot recover from it.
+            # Voice the ENTIRE script once more with the configured voice before
+            # accepting the fallback.
+            if ap.engine and ap.engine != AudioProcessor.ENGINE_EDGE:
+                logger.warning("Job %s: first narration pass used %s; retrying the whole script.",
+                               job_id, ap.engine)
                 if status_msg_id:
                     TelegramAPI.edit_message(
                         chat_id=chat_id,
                         message_id=status_msg_id,
-                        text=_status_text(f"🎙️ **Step 3/5:** Generating AI narration... ({i+1}/{num_narrations})")
+                        text=_status_text("🔁 **Step 3/5:** Retrying the whole narration with the configured voice...")
                     )
-                # ap.engine is None until a line renders, then holds the voice
-                # the whole video uses - so a fallback voice on scene 1 is never
-                # swapped back to edge-tts on scene 2 (or vice versa).
-                audio = ap.generate_single_narration(narration_text, i, engine=ap.engine)
-                if not audio[0]:
-                    logger.warning("Narration %s/%s failed; retrying once.", i + 1, num_narrations)
-                    audio = ap.generate_single_narration(narration_text, i, engine=ap.engine)
-                scene_audio.append(audio)
+                ap.reset_voice()
+                scene_audio = _voice_lines()
 
             if not any(audio[0] for audio in scene_audio):  # Only raise if narration expected
                 raise Exception("Failed to generate narration files.")
@@ -680,6 +721,8 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 done_lines.append(f"🔇 {kept_silent} scene(s) had no voice — kept silent to stay complete.")
             if dropped_silent:
                 done_lines.append(f"⚠️ {dropped_silent} scene(s) skipped (narration failed).")
+            if duplicate_scenes:
+                done_lines.append(f"⚠️ {duplicate_scenes} duplicate scene(s) skipped.")
             voice_note = ap.voice_note()
             if voice_note:
                 done_lines.append(voice_note)

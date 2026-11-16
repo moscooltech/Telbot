@@ -472,7 +472,8 @@ check("/gen rejects a bare directive",
       str(_update_bare.message.texts))
 
 print("== 10. scene / image / narration pairing stays index-aligned ==")
-from bot.handlers import _picked_pairs, _drop_unvoiced_scenes, _drop_silent_scenes
+from bot.handlers import (_picked_pairs, _drop_unvoiced_scenes, _drop_silent_scenes,
+                          _drop_duplicate_scenes)
 
 _scenes = ["s0", "s1", "s2", "s3"]
 _narrs = ["n0", "n1", "n2", "n3"]
@@ -510,6 +511,21 @@ _sc, _na = _drop_unvoiced_scenes(["s0", "s1"], ["n0", "n1"])
 check("all-voiced input is untouched", (_sc, _na) == (["s0", "s1"], ["n0", "n1"]), str((_sc, _na)))
 _sc, _na = _drop_unvoiced_scenes(["s0", "s1"], ["", "  "])
 check("all-unvoiced input yields empty lists", (_sc, _na) == ([], []), str((_sc, _na)))
+
+# A repeated narration is a repeated beat: drop the pair, never rewrite the text
+# (the old " (part 2)" suffix was spoken aloud and failed the job).
+_sc, _na, _dupes = _drop_duplicate_scenes(["s0", "s1", "s2"], ["same", "same", "other"])
+check("duplicate narration drops its scene instead of adding '(part 2)'",
+      (_sc, _na, _dupes) == (["s0", "s2"], ["same", "other"], 1),
+      str((_sc, _na, _dupes)))
+check("narration text is never rewritten",
+      not any("part" in str(n).lower() for n in _na), str(_na))
+_sc, _na, _dupes = _drop_duplicate_scenes(["s0", "s1"], ["Same beat", "same BEAT  "])
+check("duplicates are matched ignoring case and whitespace",
+      (_sc, _na, _dupes) == (["s0"], ["Same beat"], 1), str((_sc, _na, _dupes)))
+_sc, _na, _dupes = _drop_duplicate_scenes(["s0", "s1"], ["a", "b"])
+check("distinct narrations are untouched",
+      (_sc, _na, _dupes) == (["s0", "s1"], ["a", "b"], 0), str((_sc, _na, _dupes)))
 
 # A scene whose TTS failed is dropped with its image, so every later clip keeps
 # its own duration/subtitle timings instead of borrowing the next scene's.
@@ -575,6 +591,9 @@ check("edge-tts for every line is not reported", _ap.voice_note() == "", _ap.voi
 _ap.engine_usage = {_AP.ENGINE_EDGE: 2, _AP.ENGINE_GTTS: 1}
 check("a fallback voice is reported in the completion message",
       "gTTS" in _ap.voice_note(), _ap.voice_note())
+_ap.reset_voice()
+check("reset_voice unpins the voice for a clean whole-script retry",
+      _ap.engine is None and _ap.engine_usage == {}, f"{_ap.engine} {_ap.engine_usage}")
 shutil.rmtree(os.path.join(TEMP_DIR, "verify_voice_chain"), ignore_errors=True)
 
 # The scenario that used to change the narrator mid-video: edge-tts fails, so
@@ -610,6 +629,30 @@ check("line 2 never retries the failed voice",
 check("every line is counted against the one engine used",
       _ap2.engine_usage == {_AP.ENGINE_GTTS: 2}, str(_ap2.engine_usage))
 shutil.rmtree(os.path.join(TEMP_DIR, "verify_voice_pin"), ignore_errors=True)
+
+# loudnorm rewrites (and can pad) the file, so the clip length must be measured
+# AFTER it - measuring first made every scene drift behind its own narration.
+_order = []
+_ap3 = _AP("verify_voice_order")
+
+
+def _edge_ok(self, text, filepath):
+    with open(filepath, "wb") as _fh:
+        _fh.write(b"\xff\xfb" + b"\x00" * 400)
+    return filepath, None
+
+
+with _mock.patch.object(_AP, "_synthesize_edge", _edge_ok), \
+        _mock.patch.object(_AP, "_loudnorm", lambda self, p: _order.append("loudnorm") or True), \
+        _mock.patch.object(_AP, "_probe_duration", lambda self, p, t: _order.append("probe") or 2.0), \
+        _mock.patch.object(_ap_mod, "ENABLE_LOUDNORM", True):
+    _ordered_line = _ap3.generate_single_narration("line", 0)
+
+check("audio duration is measured after loudnorm rewrites the file",
+      _order == ["loudnorm", "probe"], str(_order))
+check("the line renders with that measured duration",
+      _ordered_line[1] == 2.0, str(_ordered_line))
+shutil.rmtree(os.path.join(TEMP_DIR, "verify_voice_order"), ignore_errors=True)
 
 print("== 11. series scheduler boot (PTB 20 has no Bot.loop) ==")
 import asyncio as _asyncio
