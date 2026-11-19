@@ -3,6 +3,7 @@ import asyncio
 import logging
 import subprocess
 import shutil
+import time
 
 import edge_tts
 from gtts import gTTS
@@ -23,6 +24,14 @@ class AudioProcessor:
     ENGINE_EDGE = "edge-tts"
     ENGINE_PIPER = "piper"
     ENGINE_GTTS = "gTTS"
+
+    # edge-tts intermittently answers a perfectly valid line with "No audio was
+    # received" and then succeeds on the very next request (measured: 4 of 12
+    # lines in one burst). A single attempt turned that transient hiccup into a
+    # silent stretch in the finished video, so every line gets several attempts
+    # with a growing pause between them.
+    NARRATION_ATTEMPTS = 3
+    NARRATION_RETRY_DELAY = 0.6   # seconds; multiplied by the attempt number
 
     def __init__(self, job_id):
         self.job_id = job_id
@@ -186,6 +195,19 @@ class AudioProcessor:
         self.engine = None
         self.engine_usage = {}
 
+    def fallback_voice(self, engine=ENGINE_GTTS):
+        """Pin ONE alternative engine for a whole-script re-voice.
+
+        When a line still cannot be voiced after its retries, a silent stretch in
+        the middle of a video is worse than a different (but consistent)
+        narrator: every line is re-voiced in this engine, so the video has audio
+        everywhere and never switches voices part-way through. Returns the engine
+        now pinned, for the completion message.
+        """
+        self.engine = engine
+        self.engine_usage = {}
+        return engine
+
     def generate_single_narration(self, text, index, engine=None):
         """Generate one scene's narration.
 
@@ -207,10 +229,16 @@ class AudioProcessor:
 
             last_error = ""
             for name, synthesize in self._chain(pinned):
-                # The AUTO line decides the job's voice, so give the preferred
-                # engine a second chance before settling for another voice.
-                for attempt in range(1, 2 if pinned else 3):
+                # EVERY line gets the same number of attempts, pinned or not. A
+                # pinned engine used to get exactly ONE, so a single transient
+                # failure made that scene silent for the rest of the video.
+                for attempt in range(1, self.NARRATION_ATTEMPTS + 1):
                     try:
+                        # A stream that dies mid-way leaves a partial file, and
+                        # _generate_edge_tts APPENDS - so clear it before retrying,
+                        # or the next attempt would glue onto the broken render.
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
                         path, word_timings = synthesize(text, filepath)
                         if not os.path.exists(path) or os.path.getsize(path) == 0:
                             raise Exception(f"{name} produced no audio")
@@ -231,8 +259,10 @@ class AudioProcessor:
                         return path, duration, word_timings
                     except Exception as e:
                         last_error = f"{name}: {e}"
-                        logger.warning("Scene %s: %s attempt %s failed: %s",
-                                       index, name, attempt, e)
+                        logger.warning("Scene %s: %s attempt %s/%s failed: %s",
+                                       index, name, attempt, self.NARRATION_ATTEMPTS, e)
+                        if attempt < self.NARRATION_ATTEMPTS:
+                            time.sleep(self.NARRATION_RETRY_DELAY * attempt)
 
             logger.error("Scene %s could not be voiced: %s", index, last_error)
             return None, 0, None

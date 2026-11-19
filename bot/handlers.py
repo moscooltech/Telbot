@@ -497,6 +497,8 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
         word_timings_data = []  # one entry per narration (list of {text,start,end} or None)
         kept_silent = dropped_silent = 0  # voice-failure policy counters (see below)
         voice_retried = False  # whole-script re-voice actually ran (for the completion note)
+        voice_fallback_engine = None  # engine used to re-voice lines that stayed unvoiced
+        fallback_lines = 0  # how many lines forced that fallback re-voice
 
         if video_format == "narration":
             # Narration text is used VERBATIM. The old workaround for a repeated
@@ -571,6 +573,30 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 else:
                     logger.warning("Job %s: first narration pass used %s; whole-script retry disabled "
                                    "(RETRY_NARRATION_ON_FALLBACK=false).", job_id, ap.engine)
+
+            # A line that is STILL unvoiced after its own retries would otherwise
+            # become a silent stretch in the finished video ("the audio stops for a
+            # few seconds"). A different but CONSISTENT narrator for the whole
+            # video is better than a gap: re-voice every line in the fallback
+            # engine so the audio plays everywhere and never switches voice.
+            unvoiced_lines = [i for i, audio in enumerate(scene_audio) if not audio[0]]
+            if unvoiced_lines and ap.engine != AudioProcessor.ENGINE_GTTS:
+                logger.warning("Job %s: %s line(s) still unvoiced after retries (%s); "
+                               "re-voicing the whole script in %s.",
+                               job_id, len(unvoiced_lines), unvoiced_lines,
+                               AudioProcessor.ENGINE_GTTS)
+                if status_msg_id:
+                    TelegramAPI.edit_message(
+                        chat_id=chat_id,
+                        message_id=status_msg_id,
+                        text=_status_text(
+                            f"🔁 **Step 3/5:** {len(unvoiced_lines)} line(s) failed — "
+                            "retrying the narration in a fallback voice..."
+                        )
+                    )
+                fallback_lines = len(unvoiced_lines)
+                voice_fallback_engine = ap.fallback_voice()
+                scene_audio = _voice_lines()
 
             if not any(audio[0] for audio in scene_audio):  # Only raise if narration expected
                 raise Exception("Failed to generate narration files.")
@@ -730,7 +756,12 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             if duplicate_scenes:
                 done_lines.append(f"⚠️ {duplicate_scenes} duplicate scene(s) skipped.")
             voice_note = ap.voice_note()
-            if voice_retried and not voice_note:
+            if voice_fallback_engine:
+                done_lines.append(
+                    f"🔁 {fallback_lines} line(s) failed — narration re-voiced in "
+                    f"{voice_fallback_engine} so no part is silent."
+                )
+            elif voice_retried and not voice_note:
                 done_lines.append("🔁 narration re-voiced once in the configured voice.")
             elif voice_note and not config.RETRY_NARRATION_ON_FALLBACK:
                 done_lines.append("🎙️ voice retry disabled (RETRY_NARRATION_ON_FALLBACK=false).")

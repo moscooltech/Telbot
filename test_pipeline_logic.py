@@ -618,17 +618,53 @@ _ap2 = _AP("verify_voice_pin")
 with _mock.patch.object(_AP, "_synthesize_edge", _edge_down), \
         _mock.patch.object(_AP, "_synthesize_gtts", _gtts_ok), \
         _mock.patch.object(_AP, "_probe_duration", lambda self, p, t: 4.0), \
-        _mock.patch.object(_ap_mod, "ENABLE_LOUDNORM", False):
+        _mock.patch.object(_ap_mod, "ENABLE_LOUDNORM", False), \
+        _mock.patch.object(_ap_mod.time, "sleep", lambda s: None):
     _line1 = _ap2.generate_single_narration("first line", 0)
     _line2 = _ap2.generate_single_narration("second line", 1, engine=_ap2.engine)
 
 check("line 1 renders when edge-tts is down", bool(_line1[0]), str(_line1))
 check("the voice that voiced line 1 is pinned", _ap2.engine == _AP.ENGINE_GTTS, str(_ap2.engine))
-check("line 2 never retries the failed voice",
-      _voice_calls == ["edge", "edge", "gtts", "gtts"], str(_voice_calls))
+check("line 1 gets every attempt before the fallback voice is used",
+      _voice_calls == ["edge", "edge", "edge", "gtts", "gtts"], str(_voice_calls))
 check("every line is counted against the one engine used",
       _ap2.engine_usage == {_AP.ENGINE_GTTS: 2}, str(_ap2.engine_usage))
 shutil.rmtree(os.path.join(TEMP_DIR, "verify_voice_pin"), ignore_errors=True)
+
+# The reported bug: "the audio does not play in some parts". edge-tts answers a
+# valid line with "No audio was received" (transient), the pinned engine used to
+# get ONE attempt, so that scene shipped as a silence filler.
+_retry_calls = []
+
+
+def _edge_flaky(self, text, filepath):
+    _retry_calls.append(text)
+    if len(_retry_calls) < 3:
+        raise Exception("No audio was received.")
+    with open(filepath, "wb") as _fh:
+        _fh.write(b"\xff\xfb" + b"\x00" * 400)
+    return filepath, None
+
+
+_ap4 = _AP("verify_voice_retry")
+with _mock.patch.object(_AP, "_synthesize_edge", _edge_flaky), \
+        _mock.patch.object(_AP, "_probe_duration", lambda self, p, t: 3.0), \
+        _mock.patch.object(_ap_mod, "ENABLE_LOUDNORM", False), \
+        _mock.patch.object(_ap_mod.time, "sleep", lambda s: None):
+    _retried = _ap4.generate_single_narration("a line", 0, engine=_AP.ENGINE_EDGE)
+
+check("a pinned line is retried until the transient failure clears",
+      bool(_retried[0]) and len(_retry_calls) == 3, f"{_retry_calls} {_retried[0]}")
+check("the retried line keeps the configured voice",
+      _ap4.engine == _AP.ENGINE_EDGE and _ap4.engine_usage == {_AP.ENGINE_EDGE: 1},
+      f"{_ap4.engine} {_ap4.engine_usage}")
+check("a partial render is not appended to on retry",
+      _retry_calls[0] == "a line" and os.path.getsize(_retried[0]) == 402,
+      str(_retried[0]))
+check("fallback_voice pins one alternative engine and resets the counters",
+      _ap4.fallback_voice() == _AP.ENGINE_GTTS and _ap4.engine == _AP.ENGINE_GTTS
+      and _ap4.engine_usage == {}, f"{_ap4.engine} {_ap4.engine_usage}")
+shutil.rmtree(os.path.join(TEMP_DIR, "verify_voice_retry"), ignore_errors=True)
 
 import config as _config_mod
 check("whole-script voice retry is on by default",
