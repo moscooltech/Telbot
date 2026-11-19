@@ -44,6 +44,9 @@ class AudioProcessor:
         self.engine = None
         # engine -> lines voiced, so a fallback voice is reported instead of silent.
         self.engine_usage = {}
+        # line index -> attempts it took, so recovered lines are visible in the
+        # completion summary instead of only in the logs.
+        self.attempts_by_line = {}
 
     async def _generate_edge_tts(self, text, filepath, voice=TTS_VOICE):
         """Generate audio with edge-tts while capturing real word-level timing events."""
@@ -175,6 +178,20 @@ class AudioProcessor:
             return [pair for pair in candidates if pair[0] == pinned]
         return candidates
 
+    def retry_note(self):
+        """Completion-message line for lines that a retry rescued.
+
+        A transient edge-tts hiccup used to mean a silent scene; now the line is
+        voiced on a later attempt. Saying so keeps a flaky provider visible in
+        the job summary without anyone opening the Render logs.
+        """
+        retried = [n for n in self.attempts_by_line.values() if n > 1]
+        if not retried:
+            return ""
+        extra = sum(n - 1 for n in retried)
+        return (f"🔁 {len(retried)} line(s) needed a retry "
+                f"({extra} extra attempt(s)) — all voiced, nothing silent.")
+
     def voice_note(self):
         """Completion-message line, and ONLY when the job did not use the
         configured edge-tts voice for every line - a silent voice swap is what
@@ -194,6 +211,7 @@ class AudioProcessor:
         """
         self.engine = None
         self.engine_usage = {}
+        self.attempts_by_line = {}
 
     def fallback_voice(self, engine=ENGINE_GTTS):
         """Pin ONE alternative engine for a whole-script re-voice.
@@ -206,6 +224,7 @@ class AudioProcessor:
         """
         self.engine = engine
         self.engine_usage = {}
+        self.attempts_by_line = {}
         return engine
 
     def generate_single_narration(self, text, index, engine=None):
@@ -256,6 +275,7 @@ class AudioProcessor:
                             logger.info("Job %s: voice pinned to %s for the whole video.",
                                         self.job_id, name)
                         self.engine_usage[name] = self.engine_usage.get(name, 0) + 1
+                        self.attempts_by_line[index] = attempt
                         return path, duration, word_timings
                     except Exception as e:
                         last_error = f"{name}: {e}"

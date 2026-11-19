@@ -499,6 +499,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
         voice_retried = False  # whole-script re-voice actually ran (for the completion note)
         voice_fallback_engine = None  # engine used to re-voice lines that stayed unvoiced
         fallback_lines = 0  # how many lines forced that fallback re-voice
+        retry_note = ""  # lines a retry rescued, reported in the completion summary
 
         if video_format == "narration":
             # Narration text is used VERBATIM. The old workaround for a repeated
@@ -627,6 +628,7 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
             if dropped_silent:
                 logger.warning("Job %s: skipped %s scene(s) with failed narration.",
                                job_id, dropped_silent)
+            retry_note = ap.retry_note()
             narration_paths = [audio[0] for audio in scene_audio]
             durations = [audio[1] for audio in scene_audio]
             word_timings_data = [audio[2] for audio in scene_audio]
@@ -765,6 +767,8 @@ def run_generation_sync(chat_id, scenes, narrations, metadata, job_id, video_for
                 done_lines.append("🔁 narration re-voiced once in the configured voice.")
             elif voice_note and not config.RETRY_NARRATION_ON_FALLBACK:
                 done_lines.append("🎙️ voice retry disabled (RETRY_NARRATION_ON_FALLBACK=false).")
+            if retry_note:
+                done_lines.append(retry_note)
             if voice_note:
                 done_lines.append(voice_note)
             TelegramAPI.edit_message(

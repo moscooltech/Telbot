@@ -661,9 +661,15 @@ check("the retried line keeps the configured voice",
 check("a partial render is not appended to on retry",
       _retry_calls[0] == "a line" and os.path.getsize(_retried[0]) == 402,
       str(_retried[0]))
+check("a recovered line is reported instead of passing silently",
+      "1 line(s) needed a retry" in _ap4.retry_note()
+      and "2 extra attempt(s)" in _ap4.retry_note(), _ap4.retry_note())
+check("a line voiced on the first attempt adds no retry note",
+      _ap2.retry_note() == "", f"{_ap2.attempts_by_line}")
 check("fallback_voice pins one alternative engine and resets the counters",
       _ap4.fallback_voice() == _AP.ENGINE_GTTS and _ap4.engine == _AP.ENGINE_GTTS
-      and _ap4.engine_usage == {}, f"{_ap4.engine} {_ap4.engine_usage}")
+      and _ap4.engine_usage == {} and _ap4.attempts_by_line == {},
+      f"{_ap4.engine} {_ap4.engine_usage} {_ap4.attempts_by_line}")
 shutil.rmtree(os.path.join(TEMP_DIR, "verify_voice_retry"), ignore_errors=True)
 
 import config as _config_mod
